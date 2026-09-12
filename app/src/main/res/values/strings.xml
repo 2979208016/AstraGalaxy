@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">星河</string>
+    <string name="xposed_description">星流的 LyricON 歌词提供者：为星流实时提供各主流音乐平台的歌词，由星流原生「胶囊歌词」呈现。</string>
+    <string name="lyricon_module_author">yiyi</string>
+    <string name="lyricon_module_description">星流的 LyricON 歌词提供者：为星流实时提供各主流音乐平台的歌词，由星流原生「胶囊歌词」呈现。创作者：yiyi，免费公益。</string>
+    <string name="module_author_display">创作者：yiyi</string>
+    <string name="module_contact_display">QQ：2979208016</string>
+    <string name="module_free_display">免费公益</string>
+</resources>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 星河：流动的星河 + 星辰 -->
+    <!-- 主星河流 -->
+    <path
+        android:fillColor="#7CE7FF"
+        android:pathData="M14,78 L30,66 L40,74 L94,40 L80,80 L66,78 L52,94 Z" />
+    <!-- 星河高光 -->
+    <path
+        android:fillColor="#D6F8FF"
+        android:pathData="M14,78 L22,72 L30,66 L28,74 Z" />
+    <path
+        android:fillColor="#D6F8FF"
+        android:pathData="M80,80 L87,74 L94,40 L88,52 Z" />
+    <!-- 星辰 -->
+    <path
+        android:fillColor="#FFE9A8"
+        android:pathData="M44,30 a4.6,4.6 0 1,0 9.2,0 a4.6,4.6 0 1,0 -9.2,0" />
+    <path
+        android:fillColor="#9C8CFF"
+        android:pathData="M26,86 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+    <path
+        android:fillColor="#7CF5B0"
+        android:pathData="M88,84 a2.6,2.6 0 1,0 5.2,0 a2.6,2.6 0 1,0 -5.2,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M64,20 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M92,56 a1.6,1.6 0 1,0 3.2,0 a1.6,1.6 0 1,0 -3.2,0" />
+    <path
+        android:fillColor="#BFF4FF"
+        android:pathData="M34,22 a1.4,1.4 0 1,0 2.8,0 a1.4,1.4 0 1,0 -2.8,0" />
+    <path
+        android:fillColor="#FFE9A8"
+        android:pathData="M76,18 a1.3,1.3 0 1,0 2.6,0 a1.3,1.3 0 1,0 -2.6,0" />
+</vector>

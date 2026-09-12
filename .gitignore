@@ -1,0 +1,26 @@
+# --- Gradle / Android 构建产物 ---
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# --- 生成文件 ---
+bin/
+gen/
+out/
+release/
+app/build/
+app/release/
+
+# --- 私钥（本项目的 debug.keystore 为通用调试签名，已随仓库提供）---
+*.jks

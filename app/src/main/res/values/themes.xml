@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色主题：避免 Activity 白底白字问题 -->
+    <style name="Theme.LyricProvider" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#12131A</item>
+        <item name="android:colorBackground">#12131A</item>
+        <item name="android:statusBarColor">#12131A</item>
+        <item name="android:navigationBarColor">#12131A</item>
+    </style>
+</resources>
