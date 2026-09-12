@@ -41,30 +41,15 @@
 - **通用平台**：`CloudLyricProvider` 监听 `MediaSession` 元数据 → 在线匹配歌词
 - **QQ 音乐解密**：`QrcDecrypt` / `QqDESHelper` / `QqLyrics` 解密 QRC 歌词
 
-## 构建
+## 下载
 
-### 环境要求
+前往 [Releases](https://github.com/2979208016/XingHe-AstraFlow-Provider/releases) 下载最新 APK 直接安装使用。
 
-- JDK 17+
-- Android SDK（compileSdk 37）
-- Gradle 9.x
+## 开源说明
 
-### 编译
+本仓库开源的是**应用本体源码**——即 `app/src` 下的 Kotlin 代码、资源文件与 libxposed 模块声明，供学习与二次修改。
 
-```bash
-# Debug
-./gradlew :app:assembleDebug
-
-# Release（已配置通用 debug 签名，可直接构建）
-./gradlew :app:assembleRelease
-```
-
-产物位于 `app/build/outputs/apk/<variant>/`。
-
-> 若使用非标准 SDK 路径，请在根目录创建 `local.properties` 并写入：
-> ```
-> sdk.dir=/path/to/android-sdk
-> ```
+构建配置（Gradle 脚本）与第三方构建工具不属于本项目所有，故未包含在仓库中；如需自行编译，请自备构建环境。
 
 ## 安装 & 使用
 
@@ -85,12 +70,11 @@ app/src/main/
 │       ├── ModuleLogger.kt             # 日志
 │       ├── XingHeLyricProvider.kt      # MeloYou 原生歌词提供者
 │       ├── CloudLyricProvider.kt       # 通用在线歌词提供者
-│       ├── QqLyrics.kt                 # QQ 音乐歌词
-│       ├── QrcDecrypt.kt               # QRC 解密
-│       └── QqDESHelper.kt              # DES 辅助
+│       └── QqLyrics.kt                 # QQ 音乐歌词（含 QRC 3DES 解密）
 ├── res/                                # 资源
-└── resources/META-INF/xposed/          # 模块声明（scope/module.prop/java_init）
+└── resources/META-INF/xposed/          # 模块声明（scope / module.prop / java_init）
 ```
+
 
 ## 致谢
 
