@@ -2,4 +2,16 @@
 <resources>
     <color name="ic_launcher_background">#0B1026</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- 界面配色（对齐系统深色卡片风格） -->
+    <color name="bg">#0E1013</color>
+    <color name="card">#1A1D22</color>
+    <color name="card_inner">#23272E</color>
+    <color name="divider">#2A2F37</color>
+    <color name="text">#FFFFFF</color>
+    <color name="text_sub">#8A93A0</color>
+    <color name="text_hint">#6B7480</color>
+    <color name="icon">#C8CFDA</color>
+    <color name="accent">#6FA8FF</color>
+    <color name="accent_soft">#223449</color>
 </resources>

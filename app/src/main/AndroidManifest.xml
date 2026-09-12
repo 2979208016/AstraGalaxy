@@ -13,12 +13,24 @@
         <activity
             android:name=".ui.SettingsActivity"
             android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.LyricProvider" />
+
+        <!-- 桌面入口用 alias，方便「隐藏模块桌面图标」开关 -->
+        <activity-alias
+            android:name=".ui.LauncherAlias"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:targetActivity=".ui.SettingsActivity"
             android:theme="@style/Theme.LyricProvider">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
 
         <!-- ============ LyricON 提供端识别 ============ -->
         <meta-data

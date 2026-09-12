@@ -200,20 +200,102 @@ internal class XingHeLyricProvider(
         }
     }
 
+    /** 最近一次 MediaMetadata 的歌曲签名（歌名|歌手） */
+    @Volatile
+    private var lastMetadataSignature: String? = null
+
+    /** MeloYou 歌词文件重试计数 */
+    private var meloAttempts = 0
+
+    private val meloRetry = Runnable { refreshFromDisk() }
+
+    /**
+     * MeloYou 的触发点。
+     *
+     * 它只在「真正拉到新歌词」时才重写 songLyric.json，同一首歌再次播放时不会重写，
+     * 因此不能只依赖文件写入回调；这里以 MediaSession 的歌名/歌手变化作为切歌信号，
+     * 主动去读它自己导出的 nowPlaying.json（歌曲信息）与 songLyric.json（歌词）。
+     */
     private fun onMetadataChanged(metadata: MediaMetadata?) {
         metadata ?: return
         val duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION)
-        if (duration > 0) {
-            metadataDurationMs = duration
-            synchronized(stateLock) {
-                val meta = currentMeta
-                if (meta != null && meta.duration <= 0L) {
-                    currentMeta = meta.copy(duration = duration)
-                }
+        if (duration > 0) metadataDurationMs = duration
+
+        val title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE)
+            ?.takeIf { it.isNotBlank() && it != "未知歌曲" } ?: return
+        val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)
+            ?.takeIf { it.isNotBlank() && it != "未知歌手" }
+
+        val signature = "$title|$artist"
+        if (signature == lastMetadataSignature) return
+        lastMetadataSignature = signature
+        logger.info("MeloYou metadata changed: $title - $artist")
+
+        synchronized(stateLock) {
+            val sameSong = currentMeta?.name?.let { normalize(it) == normalize(title) } == true
+            if (!sameSong) {
+                lyricForCurrentSong = null
+                currentSongId = null
+                lastPublishedSignature = null
             }
-            // 纯时长变化不触发重新发布（避免词幕端误判为新歌导致歌词跳回开头）
+            currentMeta = SongMeta(
+                id = if (sameSong) currentMeta?.id else null,
+                name = title,
+                artist = artist ?: currentMeta?.artist,
+                duration = if (duration > 0) duration else (currentMeta?.duration ?: 0L)
+            )
+        }
+
+        meloAttempts = 0
+        mainHandler.removeCallbacks(meloRetry)
+        mainHandler.post(meloRetry)
+    }
+
+    /**
+     * 从磁盘读取 MeloYou 自己写的歌曲信息与歌词。
+     * songLyric.json 里只保存「最近一首」，所以先核对歌名，避免把上一首的歌词推成当前歌曲。
+     */
+    private fun refreshFromDisk() {
+        val context = application ?: return
+        try {
+            val nowPlaying = readAppFile(context, Constants.NOW_PLAYING_FILE)
+            val fileSong = nowPlaying
+                ?.let { runCatching { JSONObject(it).optString("name") }.getOrNull() }
+                ?.takeIf { it.isNotBlank() && it != "null" }
+            val want = currentMeta?.name
+            val sameSong = want.isNullOrBlank() || fileSong.isNullOrBlank() ||
+                normalize(fileSong).contains(normalize(want)) ||
+                normalize(want).contains(normalize(fileSong))
+
+            if (sameSong) {
+                nowPlaying?.let { onNowPlayingWritten(it) }
+                readAppFile(context, Constants.SONG_LYRIC_FILE)?.let { onLyricsWritten(context, it) }
+            } else {
+                logger.info("MeloYou 歌词文件属于其它歌曲（当前=$want, 文件=$fileSong），继续等待")
+            }
+        } catch (throwable: Throwable) {
+            logger.error("MeloYou refreshFromDisk failed", throwable)
+        }
+
+        if (!isLyricReady() && meloAttempts < MELO_MAX_ATTEMPTS) {
+            meloAttempts++
+            mainHandler.postDelayed(meloRetry, MELO_RETRY_DELAY_MS)
         }
     }
+
+    private fun isLyricReady(): Boolean =
+        synchronized(stateLock) { !lyricForCurrentSong.isNullOrEmpty() }
+
+    /** 归一化：只保留字母/数字/中日韩文字，忽略大小写与符号 */
+    private fun normalize(text: String?): String {
+        if (text.isNullOrBlank()) return ""
+        val sb = StringBuilder(text.length)
+        for (c in text.lowercase()) {
+            if (c.isLetterOrDigit()) sb.append(c)
+        }
+        return sb.toString()
+    }
+
 
     private fun onPlaybackStateChanged(state: PlaybackState?) {
         state ?: return
@@ -359,6 +441,16 @@ internal class XingHeLyricProvider(
         } ?: return
 
         val lines = parseMeloYouLyrics(text) ?: return
+
+        // 防止把上一首的歌词推给当前歌曲（songLyric.json 只保存最近一首）
+        val wantTitle = currentMeta?.name
+        if (!wantTitle.isNullOrBlank()) {
+            val head = normalize(lines.firstOrNull()?.text)
+            if (head.isNotEmpty() && !head.contains(normalize(wantTitle))) {
+                logger.info("忽略不匹配的 MeloYou 歌词（当前=$wantTitle）")
+                return
+            }
+        }
 
         synchronized(stateLock) {
             lyricForCurrentSong = lines
@@ -508,6 +600,10 @@ internal class XingHeLyricProvider(
 
         /** 切歌窗口内允许的最大 position（超过视为旧歌残留） */
         private const val SWITCH_MAX_ACCEPT_MS = 8000L
+
+        /** MeloYou 歌词文件重试上限与间隔 */
+        private const val MELO_MAX_ATTEMPTS = 12
+        private const val MELO_RETRY_DELAY_MS = 1500L
 
         /** 歌词未到时延迟发布的时长 */
         private const val DELAYED_PUBLISH_MS = 1200L
