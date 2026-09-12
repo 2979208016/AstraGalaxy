@@ -88,7 +88,8 @@ internal class HttpLyricSniffer(
         if (length < 64 || length > maxPayload) return false
         if (!text.contains('[') && !text.contains("lyric", true) && !text.contains("lrc", true)) return false
         return LRC_LIKE.containsMatchIn(text) || QRC_LIKE.containsMatchIn(text) ||
-            text.contains("LyricContent") || text.contains("tlyric")
+            text.contains("LyricContent") || text.contains("tlyric") ||
+            text.contains("lang_translations")
     }
 
     private fun submitString(text: String) {

@@ -117,10 +117,34 @@ internal class LocalLyricProvider(
         hookApplicationLifecycle()
         hookMediaSession()
         installSniffer()
+        installBluetoothBoost()
         logger.info(
             "Local lyric hooks installed for $hostPackage " +
                 "(${recipe?.displayName ?: "通用嗅探"}) in $processName"
         )
+    }
+
+    /**
+     * 酷我、汽水这类播放器只在「检测到无线音频输出」时才上报完整媒体信息，
+     * 否则 MediaSession 里永远没有歌名。这里只把两个查询方法改成恒为 true，
+     * 不连接、不开启任何真实设备，对播放器本身没有副作用。
+     */
+    private fun installBluetoothBoost() {
+        if (hostPackage !in Constants.BLUETOOTH_BOOST_PACKAGES) return
+        val targets = listOf(
+            "android.media.AudioManager" to "isBluetoothA2dpOn",
+            "android.bluetooth.BluetoothAdapter" to "isEnabled"
+        )
+        for ((className, methodName) in targets) {
+            try {
+                val clazz = Class.forName(className, false, classLoader)
+                val method = clazz.getDeclaredMethod(methodName)
+                module.hook(method).intercept { true }
+                logger.info("蓝牙输出伪装已挂载：$className#$methodName")
+            } catch (throwable: Throwable) {
+                logger.warn("蓝牙输出伪装失败：$className#$methodName（${throwable.message}）")
+            }
+        }
     }
 
     // ---------------- Provider（惰性注册） ----------------
@@ -249,7 +273,8 @@ internal class LocalLyricProvider(
             ) return true
             return false
         }
-        return sniffedAt >= songSwitchAt
+        // 没有标题信息：接受切歌瞬间前后很短窗口内嗅到的内容（很多播放器先拉歌词、后报元数据）
+        return sniffedAt >= songSwitchAt - SWITCH_GRACE_MS
     }
 
     // ---------------- MediaSession ----------------
@@ -397,7 +422,7 @@ internal class LocalLyricProvider(
         val lastAttempt = index >= RETRY_DELAYS_MS.size
 
         val localRecipe = recipe
-        if (localRecipe == null) {
+        if (localRecipe == null && hostPackage != Constants.LUNA_PACKAGE) {
             // 没有本地配方：全程等网络嗅探，窗口结束还没等到就兜底推歌曲信息
             if (lastAttempt) publishFallback(title, artist, duration, mediaId)
             else mainHandler.postDelayed(retryTask, delay)
@@ -411,9 +436,36 @@ internal class LocalLyricProvider(
                 return@execute
             }
             val started = SystemClock.elapsedRealtime()
+            if (hostPackage == Constants.LUNA_PACKAGE) {
+                // 汽水音乐：歌词是它自己按歌曲 id 命名的 JSON 缓存，读不到就等下一次重试
+                val luna = runCatching { LunaLyric.find(context, mediaId) }.getOrNull()
+                val cost = SystemClock.elapsedRealtime() - started
+                if (luna != null && luna.lines.size >= 3) {
+                    if (currentSignature != signature) {
+                        logger.info("Dropped stale lyric (song changed)")
+                        return@execute
+                    }
+                    lyricFound = true
+                    mainHandler.post {
+                        publish(title, artist, duration, mediaId, luna.lines, "汽水音乐")
+                    }
+                    return@execute
+                }
+                logger.info("汽水音乐诊断#" + (index + 1) + "：" + LunaLyric.describe(context, mediaId))
+                logger.info("汽水音乐：缓存里还没有歌词（attempt #${index + 1}, ${cost}ms）")
+                if (!lyricFound && currentSignature == signature) {
+                    if (lastAttempt) {
+                        mainHandler.post { publishFallback(title, artist, duration, mediaId) }
+                    } else {
+                        mainHandler.postDelayed(retryTask, delay)
+                    }
+                }
+                return@execute
+            }
+            val target = localRecipe!!
             val lines = try {
-                LocalLyricFinder.find(context, localRecipe, title, artist, duration, mediaId) {
-                    logger.info("[${localRecipe.displayName}] $it")
+                LocalLyricFinder.find(context, target, title, artist, duration, mediaId) {
+                    logger.info("[${target.displayName}] $it")
                 }
             } catch (t: Throwable) {
                 logger.error("Local lyric lookup failed: ${t.message}", t)
@@ -596,6 +648,8 @@ internal class LocalLyricProvider(
 
     companion object {
         /** 缓存歌词有效期（仅用于「歌词先到、歌曲信息后到」的场景） */
+        /** 无标题歌词的「切歌前后」容忍窗口：很多播放器先拉歌词、后报元数据 */
+        private const val SWITCH_GRACE_MS = 4_000L
         private const val PENDING_TTL_MS = 30_000L
 
         /** 进度写入间隔：星流按帧读共享内存，41ms 是它期望的默认节奏 */

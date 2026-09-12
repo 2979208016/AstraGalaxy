@@ -32,6 +32,8 @@ AstraGalaxy 是 [LyricON](https://github.com/Proify/lyricon) 生态中的「歌�
 | QQ 音乐 | `com.tencent.qqmusic` | `qqmusic/qrc` 的 QRC |
 | 网易云音乐 | `com.netease.cloudmusic` | `LrcCache`（文件名与内容自带歌曲 id） |
 | 欢太 / OPPO 音乐 | `com.heytap.music` | `lyric` 目录的 alm3ll |
+| 酷我音乐 | `cn.kuwo.player` | 无线输出伪装 + 网络歌词旁路 |
+| 汽水音乐 | `com.luna.music` | `cache/NetCacheLoader` 里按歌曲 id 命名的歌词 JSON |
 | 洛雪音乐助手 | `cn.toside.music.mobile` | JS 歌词桥（歌词模块 + 自定义音源回调） |
 
 上面这些平台都不需要额外配置；没列出来的应用勾选作用域后同样会尝试网络 / 桥接嗅探。

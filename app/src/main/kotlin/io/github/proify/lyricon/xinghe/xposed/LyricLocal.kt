@@ -340,6 +340,8 @@ internal object LyricParsers {
      * 纯 LRC、纯 QRC、纯 YRC、KRC 二进制。
      */
     fun parseAnyPayload(text: String): LocalLyric? {
+        // 汽水音乐的歌词 JSON（{"lyric":{"type":"krc","content":…}}）
+        LunaLyric.parsePayload(trimmedText(text))?.let { if (it.lines.size >= 3) return it }
         val trimmed = text.trim()
         if (trimmed.length < 32 || trimmed.length > 4_000_000) return null
 
@@ -398,6 +400,8 @@ internal object LyricParsers {
         return null
     }
 
+    private fun trimmedText(text: String): String = text.trim()
+    /** 嗅探到的二进制（KRC 等） */
     /** 嗅探到的二进制（KRC 等） */
     fun parseAnyBytes(bytes: ByteArray): LocalLyric? {
         parseKrc(bytes)?.let { if (it.lines.isNotEmpty()) return it }

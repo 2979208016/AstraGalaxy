@@ -5,10 +5,12 @@
         <item>com.music</item>
         <item>com.kugou.android</item>
         <item>com.kugou.android.lite</item>
-        <item>cn.wenyu.bodian</item>
+        <item>cn.kuwo.player</item>
         <item>com.tencent.qqmusic</item>
+        <item>com.luna.music</item>
         <item>com.netease.cloudmusic</item>
         <item>com.heytap.music</item>
+        <item>cn.wenyu.bodian</item>
         <item>cn.toside.music.mobile</item>
     </string-array>
 

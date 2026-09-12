@@ -3,8 +3,9 @@ package io.github.proify.lyricon.xinghe.xposed
 /**
  * 星河模块常量。
  *
- * 星河是星流（AstraFlow）的 LyricON「歌词提供者」：只把播放器**本地已有的**
- * 歌词按 LyricON 协议推给星流，由星流原生「胶囊歌词」呈现。全程离线，不联网。
+ * 星河是星流（AstraFlow）的 LyricON「歌词提供者」：把播放器**自己已经拿到的**
+ * 歌词按 LyricON 协议推给星流，由星流原生「胶囊歌词」呈现。
+ * 优先读它缓存好的文件，读不到再只读旁路嗅探它刚收到的网络歌词。全程不改播放器行为。
  */
 object Constants {
 
@@ -16,6 +17,20 @@ object Constants {
 
     /** 洛雪音乐助手 */
     const val LX_PACKAGE: String = "cn.toside.music.mobile"
+
+    /** 汽水音乐：歌词在它自己的 NetCacheLoader 缓存里，按歌曲 id 定位（见 [LunaLyric]） */
+    const val LUNA_PACKAGE: String = "com.luna.music"
+
+    /** 酷我音乐 */
+    const val KUWO_PACKAGE: String = "cn.kuwo.player"
+
+    /**
+     * 需要「让宿主以为正连着无线音频输出」的播放器。
+     *
+     * 酷我、汽水这类播放器只在检测到蓝牙 / A2DP 时才会上报完整的媒体信息与歌词相关回调，
+     * 否则 MediaSession 一直是空的。这里只把两个查询方法改成恒为 true，不连接任何真实设备。
+     */
+    val BLUETOOTH_BOOST_PACKAGES: Set<String> = setOf(KUWO_PACKAGE, LUNA_PACKAGE)
 
     /** 远程偏好（供设置页与目标进程共享） */
     const val PREFS_NAME: String = "xinghe_settings"
@@ -81,6 +96,13 @@ object Constants {
                 LocalSource(BaseDir.EXTERNAL_FILES, "lyric", LyricFormat.LRC, listOf("alm3ll", "lrc")),
                 LocalSource(BaseDir.CACHE, "lyric", LyricFormat.LRC, listOf("alm3ll", "lrc"))
             )
+        ),
+        // 汽水音乐不走「按扩展名扫目录」：它的歌词是按歌曲 id 命名的 JSON 缓存，
+        // 由 LunaLyric 按 id 直接定位，这里留空配方只为在日志里显示平台名。
+        LocalRecipe(
+            packageName = LUNA_PACKAGE,
+            displayName = "汽水音乐",
+            sources = emptyList()
         )
     )
 

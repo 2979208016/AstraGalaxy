@@ -4,10 +4,12 @@ com.music
 # 本地歌词缓存适配
 com.kugou.android
 com.kugou.android.lite
-cn.wenyu.bodian
+cn.kuwo.player
 com.tencent.qqmusic
+com.luna.music
 com.netease.cloudmusic
 com.heytap.music
+cn.wenyu.bodian
 
 # 洛雪音乐助手（歌词模块 / JS 桥）
 cn.toside.music.mobile

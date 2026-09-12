@@ -8,7 +8,7 @@
     <string name="xposed_description">AstraGalaxy · 星流的 LyricON 歌词提供者：离线优先读取播放器自己缓存好的歌词文件；读不到时，就在播放器进程内只读旁路嗅探它刚收到的网络歌词——okhttp 响应体，以及 React Native 应用的 Java→JS 歌词桥；解析出逐字与翻译后按 LyricON 协议推给星流，由星流原生「胶囊歌词」呈现。不修改播放器行为，不请求任何在线歌词接口。</string>
 
     <string name="lyricon_module_author">yiyi</string>
-    <string name="lyricon_module_description">AstraGalaxy · 星流的 LyricON 歌词提供者：离线优先读取播放器本地歌词文件，读不到时在播放器进程内只读旁路嗅探网络歌词与 JS 歌词桥。推荐作用域：酷狗音乐、酷狗概念版、波点音乐、QQ 音乐、网易云音乐、OPPO 音乐、MeloYou 与洛雪音乐助手；也可在 LSPosed 中自行勾选其它音乐应用。创作者：yiyi，免费公益。</string>
+    <string name="lyricon_module_description">AstraGalaxy · 星流的 LyricON 歌词提供者：离线优先读取播放器本地歌词文件，读不到时在播放器进程内只读旁路嗅探网络歌词与 JS 歌词桥。推荐作用域：酷狗音乐、酷狗概念版、酷我音乐、QQ 音乐、汽水音乐、网易云音乐、OPPO 音乐、波点音乐、MeloYou 与洛雪音乐助手；也可在 LSPosed 中自行勾选其它音乐应用。创作者：yiyi，免费公益。</string>
     <string name="module_author_display">创作者：yiyi</string>
     <string name="module_contact_display">QQ：2979208016</string>
     <string name="module_free_display">免费公益</string>
@@ -24,7 +24,7 @@
     <string name="ui_btn_apps">适配应用</string>
 
     <string name="ui_title_apps">适配应用</string>
-    <string name="ui_apps_body">酷狗音乐\n酷狗概念版\n波点音乐\nQQ 音乐\n网易云音乐\nOPPO / 欢太音乐\nMeloYou\n洛雪音乐助手（JS 歌词桥）\n\n其它应用：勾选作用域后自动尝试网络 / 桥接嗅探</string>
+    <string name="ui_apps_body">酷狗音乐\n酷狗概念版\n酷我音乐\nQQ 音乐\n汽水音乐\n网易云音乐\nOPPO / 欢太音乐\n波点音乐\nMeloYou\n洛雪音乐助手（JS 歌词桥）\n\n其它应用：勾选作用域后自动尝试网络 / 桥接嗅探</string>
 
     <string name="ui_title_about">关于 AstraGalaxy</string>
     <string name="ui_sub_about">离线优先，读不到再嗅探网络 / 歌词桥</string>
@@ -44,7 +44,7 @@
     <string name="ui_dialog_ok">知道了</string>
     <string name="ui_dialog_close">关闭</string>
 
-    <string name="ui_about_body">AstraGalaxy 是星流（AstraFlow）的 LyricON「歌词提供者」，按 LyricON 协议把歌词实时推给星流，由星流原生「胶囊歌词」在流体云岛等位置呈现。\n\n歌词优先来自播放器自己的本地缓存（酷狗、波点、QQ 音乐、网易云、OPPO 音乐、MeloYou），读不到时再在播放器进程里只读旁路嗅探它刚收到的网络歌词与 React Native 歌词桥，因此洛雪音乐助手这类只在内存里显示歌词的播放器也能用。\n\n它自身没有任何播放界面、歌词渲染或悬浮窗，不修改播放器行为，只做只读旁路。\n\n使用方法：在 LSPosed 中启用本模块并勾选要适配的音乐 App（推荐作用域已默认勾选，也可以自行添加），重启对应 App，再在星流中开启「胶囊歌词」。</string>
+    <string name="ui_about_body">AstraGalaxy 是星流（AstraFlow）的 LyricON「歌词提供者」，按 LyricON 协议把歌词实时推给星流，由星流原生「胶囊歌词」在流体云岛等位置呈现。\n\n歌词优先来自播放器自己的缓存（酷狗、酷我、QQ 音乐、汽水、波点、网易云、OPPO 音乐、MeloYou），读不到时再在播放器进程里只读旁路嗅探它刚收到的网络歌词与 React Native 歌词桥，因此洛雪音乐助手这类只在内存里显示歌词的播放器也能用。\n\n它自身没有任何播放界面、歌词渲染或悬浮窗，不修改播放器行为，只做只读旁路。\n\n使用方法：在 LSPosed 中启用本模块并勾选要适配的音乐 App（推荐作用域已默认勾选，也可以自行添加），重启对应 App，再在星流中开启「胶囊歌词」。</string>
 
     <string name="ui_author_body">创作者：yiyi\n联系 QQ：2979208016\n\n本项目免费公益，禁止任何形式的倒卖与付费代装。\n如果它对你有帮助，欢迎把问题与建议反馈给我。</string>
 
