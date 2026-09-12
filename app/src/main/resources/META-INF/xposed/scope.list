@@ -1,25 +1,10 @@
 # 星河（星流附属模块）作用域
-# 歌词提供者：MeloYou + 通用在线匹配（主流音乐平台）
+# MeloYou（原生歌词文件）
 com.music
-com.netease.cloudmusic
-com.hihonor.cloudmusic
-com.tencent.qqmusic
-com.tencent.qqmusicpad
-com.tencent.qqmusiccar
+# 本地歌词缓存适配
 com.kugou.android
 com.kugou.android.lite
-cn.kuwo.player
-com.kuwo.cn
-com.spotify.music
-com.apple.android.music
-com.maxmpz.audioplayer
-com.luna.music
-com.ikunshare.music.mobile
-com.lxnetease.music.mobile
-cn.toside.music.mobile
 cn.wenyu.bodian
-app.symfonik.music.player
-com.miui.player
-com.oplus.melody
-com.coloros.music
-com.meizu.media.music
+com.tencent.qqmusic
+com.netease.cloudmusic
+com.heytap.music
