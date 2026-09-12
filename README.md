@@ -2,7 +2,7 @@
 
 > 星流（AstraFlow）的 **LyricON 歌词提供者** —— 把各主流音乐平台的歌词实时提供给星流，由星流原生「胶囊歌词」呈现。
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/Android-8.0%2B-green)
 ![API](https://img.shields.io/badge/libxposed-102-orange)
 
@@ -99,7 +99,7 @@ app/src/main/
 
 ## 许可
 
-本项目基于 **GPL-3.0** 开源，详见 [LICENSE](LICENSE)。
+本项目基于 **MIT** 开源，详见 [LICENSE](LICENSE)。
 
 ## 关于
 
