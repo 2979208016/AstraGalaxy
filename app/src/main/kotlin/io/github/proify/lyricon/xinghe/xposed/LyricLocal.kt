@@ -3,6 +3,7 @@ package io.github.proify.lyricon.xinghe.xposed
 import android.content.Context
 import io.github.proify.lyricon.lyric.model.LyricWord
 import io.github.proify.lyricon.lyric.model.RichLyricLine
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -55,7 +56,14 @@ internal object LyricParsers {
     private val KRC_LINE = Regex("""^\[(\d+)\s*,\s*(\d+)](.*)$""")
     private val KRC_WORD = Regex("""<(\d+)\s*,\s*(\d+)\s*,\s*(\d+)>""")
     private val QRC_LINE = Regex("""\[(\d+)\s*,\s*(\d+)]""")
-    private val QRC_WORD = Regex("""\(\s*\d+\s*,\s*\d+\s*\)""")
+    private val QRC_WORD = Regex("""\(\s*(\d+)\s*,\s*(\d+)\s*\)""")
+    private val YRC_LINE = Regex("""^\[(\d+)\s*,\s*(\d+)]""")
+    private val YRC_WORD = Regex("""\(\s*(\d+)\s*,\s*(\d+)\s*,\s*\d+\s*\)""")
+    /** 网络歌词里常见的歌词字段名 */
+    private val LYRICS_KEYS = arrayOf(
+        "lyric", "lrc", "yrc", "krc", "qrc", "lyricContent",
+        "content", "lyrics", "text", "tlyric"
+    )
     private val META_LINE = Regex("""^\[([A-Za-z]+)\s*:\s*(.*?)]$""")
     private val LRC_TIME = Regex("""\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?]""")
     private val LRC_WORD_TAG = Regex("""<\s*-?\d+\s*,\s*-?\d+\s*>""")
@@ -158,22 +166,21 @@ internal object LyricParsers {
             }
         }
 
-        // QRC 行：[start,dur] 文本(字偏移,字时长)...
+        // QRC 行：[start,dur] 文本(字偏移,字时长)...，字级时间直接映射成逐字歌词
         val tags = QRC_LINE.findAll(body).toList()
-        val items = ArrayList<Pair<Long, String>>()
+        val items = ArrayList<RichLyricLine>()
         var firstLine: String? = null
         for (i in tags.indices) {
             val start = tags[i].groupValues[1].toLongOrNull() ?: continue
+            val dur = tags[i].groupValues[2].toLongOrNull() ?: 0L
             val from = tags[i].range.last + 1
             val to = if (i + 1 < tags.size) tags[i + 1].range.first else body.length
             if (from >= to) continue
-            val text = body.substring(from, to)
-                .replace(QRC_WORD, "")
-                .replace(ANY_TAG, "")
-                .trim()
+            val line = parseWords(start, dur, body.substring(from, to).replace(ANY_TAG, ""), QRC_WORD) ?: continue
+            val text = line.text.orEmpty().trim()
             if (text.isEmpty() || isPlaceholder(text)) continue
             if (firstLine == null) firstLine = text
-            items.add(start to text)
+            items.add(line)
         }
         if (title == null) {
             guessTitleArtist(firstLine)?.let {
@@ -181,7 +188,7 @@ internal object LyricParsers {
                 artist = artist ?: it.second
             }
         }
-        return LocalLyric(build(items), title, artist, null, firstLine)
+        return LocalLyric(items, title, artist, null, firstLine)
     }
 
     // ---------------- 通用 LRC（波点 .lrcx / OPPO .alm3ll / 普通 .lrc） ----------------
@@ -232,25 +239,45 @@ internal object LyricParsers {
 
     fun parseNetease(text: String): LocalLyric? {
         val obj = runCatching { JSONObject(text) }.getOrNull() ?: return null
-        val rawLrc = obj.optString("lrc").takeIf { it.isNotBlank() }
-            ?: obj.optString("yrc").takeIf { it.isNotBlank() }
-            ?: return null
+        val lrc = obj.optString("lrc").takeIf { it.isNotBlank() }
+        val yrc = obj.optString("yrc").takeIf { it.isNotBlank() }
+        if (lrc == null && yrc == null) return null
 
         val id = obj.optString("musicId").takeIf { it.isNotBlank() && it != "0" }
 
+        // 翻译：新旧字段名都认
         val translation = HashMap<Long, String>()
-        obj.optString("lrcTranslateLyric").takeIf { it.isNotBlank() }?.let { trans ->
-            for ((t, s) in parseNeteaseLines(trans)) translation[t] = s
+        for (key in arrayOf("lrcTranslateLyric", "tlyric", "translation", "yrcTranslate")) {
+            obj.optString(key).takeIf { it.isNotBlank() }?.let { raw ->
+                for ((t, s) in parseNeteaseLines(raw)) translation[t] = s
+            }
         }
 
-        val rows = parseNeteaseLines(rawLrc)
-        if (rows.isEmpty()) return null
-        val sorted = rows.sortedBy { it.first }
-        val lines = sorted.mapIndexed { i, (b, s) ->
-            val e = (sorted.getOrNull(i + 1)?.first ?: (b + 3000L)).coerceAtLeast(b)
-            RichLyricLine(begin = b, end = e, text = s, translation = translation[b])
+        // 音译（罗马音）
+        val roma = HashMap<Long, String>()
+        for (key in arrayOf("romalrc", "roma", "romaLyric")) {
+            obj.optString(key).takeIf { it.isNotBlank() }?.let { raw ->
+                for ((t, s) in parseNeteaseLines(raw)) roma[t] = s
+            }
         }
-        return LocalLyric(lines, null, null, id, sorted.firstOrNull()?.second)
+
+        // 有逐字（yrc）就用逐字，否则退回普通行歌词
+        val base = yrc?.let { parseNeteaseYrc(it) }.orEmpty().ifEmpty {
+            lrc?.let { parseNeteaseLines(it) }.orEmpty()
+                .map { (t, s) -> RichLyricLine(begin = t, end = t, text = s) }
+        }
+        if (base.isEmpty()) return null
+
+        val sorted = base.sortedBy { it.begin }
+        val lines = sorted.mapIndexed { i, line ->
+            val end = (sorted.getOrNull(i + 1)?.begin ?: (line.begin + 3000L)).coerceAtLeast(line.begin)
+            line.end = end
+            line.duration = end - line.begin
+            line.translation = translation[line.begin]
+            line.roma = roma[line.begin]
+            line
+        }
+        return LocalLyric(lines, null, null, id, lines.firstOrNull()?.text)
     }
 
     /**
@@ -287,6 +314,96 @@ internal object LyricParsers {
             }
         }
         return out
+    }
+
+    /** 网易云逐字 yrc：[start,dur](字偏移,字时长,0)字… */
+    fun parseNeteaseYrc(raw: String): List<RichLyricLine> {
+        val out = ArrayList<RichLyricLine>()
+        for (line in raw.lineSequence()) {
+            val l = line.trim()
+            if (l.isEmpty()) continue
+            val m = YRC_LINE.find(l) ?: continue
+            val begin = m.groupValues[1].toLongOrNull() ?: continue
+            val dur = m.groupValues[2].toLongOrNull() ?: 0L
+            val parsed = parseWords(begin, dur, l.substring(m.range.last + 1), YRC_WORD) ?: continue
+            val text = parsed.text.orEmpty().trim()
+            if (text.isEmpty() || isPlaceholder(text)) continue
+            out.add(parsed)
+        }
+        return out
+    }
+
+    /**
+     * 嗅探到的网络歌词：不假设格式，按内容自己判断。
+     *
+     * 支持 JSON 包装（lyric / lrc / yrc / krc / qrc / tlyric 等字段，含一层嵌套）、
+     * 纯 LRC、纯 QRC、纯 YRC、KRC 二进制。
+     */
+    fun parseAnyPayload(text: String): LocalLyric? {
+        val trimmed = text.trim()
+        if (trimmed.length < 32 || trimmed.length > 4_000_000) return null
+
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            val obj = runCatching { JSONObject(trimmed) }.getOrNull()
+            if (obj != null) {
+                parseNetease(trimmed)?.let { if (it.lines.size >= 3) return it }
+                for (key in LYRICS_KEYS) {
+                    val value = obj.optString(key).takeIf { it.isNotBlank() } ?: continue
+                    parseAnyPayload(value)?.let { if (it.lines.size >= 3) return it }
+                }
+                for (key in obj.keys()) {
+                    val nested = obj.opt(key) ?: continue
+                    val value = when (nested) {
+                        is JSONObject -> LYRICS_KEYS.firstNotNullOfOrNull { k ->
+                            nested.optString(k).takeIf { it.isNotBlank() }
+                        }
+                        is JSONArray -> (0 until nested.length()).firstNotNullOfOrNull { i ->
+                            nested.optString(i).takeIf { it.isNotBlank() }
+                        }
+                        else -> null
+                    } ?: continue
+                    parseAnyPayload(value)?.let { if (it.lines.size >= 3) return it }
+                }
+            } else {
+                runCatching { JSONArray(trimmed) }.getOrNull()?.let { array ->
+                    for (i in 0 until array.length()) {
+                        val value = when (val element = array.opt(i)) {
+                            is String -> element
+                            is JSONObject -> element.toString()
+                            else -> null
+                        } ?: continue
+                        parseAnyPayload(value)?.let { if (it.lines.size >= 3) return it }
+                    }
+                }
+            }
+        }
+
+        if (trimmed.contains("LyricContent")) {
+            parseQrcText(trimmed).let { if (it.lines.size >= 3) return it }
+        }
+        if (YRC_WORD.containsMatchIn(trimmed)) {
+            val lines = parseNeteaseYrc(trimmed)
+            if (lines.size >= 3) return LocalLyric(lines, null, null, null, lines.firstOrNull()?.text)
+        }
+        if (QRC_LINE.containsMatchIn(trimmed)) {
+            parseQrcText(trimmed).let { if (it.lines.size >= 3) return it }
+        }
+        parseLrcText(trimmed).let { if (it.lines.size >= 3) return it }
+
+        // 有些平台把歌词塞在 JSON 字符串里，换行是转义的
+        val unescaped = trimmed.replace("\\n", "\n").replace("\\/", "/")
+        if (unescaped != trimmed) {
+            parseLrcText(unescaped).let { if (it.lines.size >= 3) return it }
+        }
+        return null
+    }
+
+    /** 嗅探到的二进制（KRC 等） */
+    fun parseAnyBytes(bytes: ByteArray): LocalLyric? {
+        parseKrc(bytes)?.let { if (it.lines.isNotEmpty()) return it }
+        val text = runCatching { bytes.toString(Charsets.UTF_8) }.getOrNull() ?: return null
+        if (text.count { it == '\u0000' } > 4) return null
+        return parseAnyPayload(text)
     }
 
     // ---------------- 工具 ----------------
@@ -427,6 +544,10 @@ internal object LocalLyricFinder {
         val wantArtist = normalize(artist)
         val now = System.currentTimeMillis()
 
+        // 索引快速通道：之前扫过并记下的「歌曲 id / 歌名 / 歌手 → 文件」直接命中
+        indexLookup(context, recipe, mediaId, durationMs, wantTitle, wantArtist, now, log)
+            ?.let { return it }
+
         var bestScore = Int.MIN_VALUE
         var bestLyric: LocalLyric? = null
         var newest: Pair<File, LocalLyric>? = null
@@ -441,7 +562,7 @@ internal object LocalLyricFinder {
                 .take(MAX_CANDIDATES)
 
             for (file in candidates) {
-                val lyric = parse(file, src.format) ?: continue
+                val lyric = parse(context, file, src.format) ?: continue
                 if (lyric.lines.isEmpty()) continue
                 if (newest == null || file.lastModified() > newest!!.first.lastModified()) {
                     newest = file to lyric
@@ -534,7 +655,7 @@ internal object LocalLyricFinder {
         return score
     }
 
-    private fun parse(file: File, format: LyricFormat): LocalLyric? {
+    private fun parse(context: Context, file: File, format: LyricFormat): LocalLyric? {
         val path = file.absolutePath
         val mtime = file.lastModified()
         cache[path]?.let { if (it.mtime == mtime) return it.lyric }
@@ -548,7 +669,51 @@ internal object LocalLyricFinder {
         }.getOrNull()
         if (cache.size > 600) cache.clear()
         cache[path] = Entry(mtime, lyric)
+        if (lyric != null && lyric.lines.isNotEmpty()) {
+            runCatching { LyricIndex.remember(context, file, lyric) }
+        }
         return lyric
+    }
+
+    /** 索引命中：直接用之前记录过的文件，跳过整目录扫描 */
+    private fun indexLookup(
+        context: Context,
+        recipe: LocalRecipe,
+        mediaId: String?,
+        durationMs: Long,
+        wantTitle: String,
+        wantArtist: String,
+        now: Long,
+        log: (String) -> Unit
+    ): List<RichLyricLine>? {
+        val files = LyricIndex.lookup(context, wantTitle, wantArtist, mediaId)
+        if (files.isEmpty()) return null
+        for (file in files) {
+            val format = formatOf(recipe, file) ?: continue
+            val lyric = parse(context, file, format) ?: continue
+            if (lyric.lines.isEmpty()) continue
+            val score = scoreOf(file, lyric, wantTitle, wantArtist, mediaId, durationMs, now)
+            if (score >= ACCEPT_SCORE) {
+                log("索引命中 score=$score: ${file.name}")
+                return lyric.lines
+            }
+        }
+        return null
+    }
+
+    /** 索引里的文件不带来源信息，按后缀回溯格式，兜底用配方的第一项 */
+    private fun formatOf(recipe: LocalRecipe, file: File): LyricFormat? {
+        val name = file.name.lowercase()
+        for (src in recipe.sources) {
+            if (src.ext.isNotEmpty() && src.ext.any { name.endsWith(".$it") }) return src.format
+        }
+        return when {
+            name.endsWith(".krc") -> LyricFormat.KRC
+            name.endsWith(".qrc") -> LyricFormat.QRC
+            name.endsWith(".lrcx") -> LyricFormat.LRC
+            name.endsWith(".alm3ll") -> LyricFormat.LRC
+            else -> recipe.sources.firstOrNull()?.format
+        }
     }
 
     private fun resolveDir(context: Context, src: LocalSource): File? {

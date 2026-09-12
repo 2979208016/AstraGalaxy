@@ -4,8 +4,10 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.os.Bundle
@@ -21,12 +23,15 @@ import android.widget.TextView
 import android.widget.Toast
 import io.github.proify.lyricon.xinghe.R
 import io.github.proify.lyricon.xinghe.xposed.Constants
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
- * 星河设置页。
+ * AstraGalaxy 设置页。
  *
  * 结构对齐系统模块页：顶部标题 + 开关卡（启用模块 / 隐藏桌面图标 / 快捷按钮）
- * + 功能卡（支持的应用、歌词来源、匹配策略）+ 关于卡（关于、创作者、公益）。
+ * + 关于卡（关于、创作者、公益、检查更新）。
  *
  * 页面上的功能描述与 xposed/Constants.kt 里的适配表一一对应，
  * 新增或移除平台时必须同步更新 strings.xml 中的说明文案。
@@ -38,6 +43,7 @@ class SettingsActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences(Constants.PREFS_NAME, Context.MODE_PRIVATE)
+        syncLauncherIcon()
         setContentView(buildUi())
     }
 
@@ -57,14 +63,12 @@ class SettingsActivity : Activity() {
         header(root)
         switchCard(root)
         gap(root, 14)
-        featureCard(root)
-        gap(root, 14)
         aboutCard(root)
         return scroll
     }
 
     private fun header(root: LinearLayout) {
-        root.addView(text("星河", 30f, true, color(R.color.text)))
+        root.addView(text(getString(R.string.app_name), 30f, true, color(R.color.text)))
         root.addView(
             text(getString(R.string.ui_subtitle), 14f, false, color(R.color.text_sub))
                 .apply { setPadding(0, dp(6), 0, 0) }
@@ -123,38 +127,12 @@ class SettingsActivity : Activity() {
             weight()
         )
         row.addView(
-            actionButton(getString(R.string.ui_btn_platforms), R.drawable.ic_apps) {
-                showDialog(getString(R.string.ui_title_platforms), getString(R.string.ui_platforms_body))
+            actionButton(getString(R.string.ui_btn_apps), R.drawable.ic_apps) {
+                showDialog(getString(R.string.ui_title_apps), getString(R.string.ui_apps_body))
             },
             weight()
         )
         card.addView(row)
-    }
-
-    private fun featureCard(root: LinearLayout) {
-        val card = card(root)
-
-        itemRow(
-            card, R.drawable.ic_apps,
-            getString(R.string.ui_title_platforms),
-            getString(R.string.ui_sub_platforms, Constants.LOCAL_RECIPES.size + 1)
-        ) { showDialog(getString(R.string.ui_title_platforms), getString(R.string.ui_platforms_body)) }
-
-        divider(card)
-
-        itemRow(
-            card, R.drawable.ic_note,
-            getString(R.string.ui_title_source),
-            getString(R.string.ui_sub_source)
-        ) { showDialog(getString(R.string.ui_title_source), getString(R.string.ui_source_body)) }
-
-        divider(card)
-
-        itemRow(
-            card, R.drawable.ic_tune,
-            getString(R.string.ui_title_match),
-            getString(R.string.ui_sub_match)
-        ) { showDialog(getString(R.string.ui_title_match), getString(R.string.ui_match_body)) }
     }
 
     private fun aboutCard(root: LinearLayout) {
@@ -181,6 +159,14 @@ class SettingsActivity : Activity() {
             getString(R.string.ui_title_free),
             getString(R.string.ui_sub_free)
         ) { showDialog(getString(R.string.ui_title_free), getString(R.string.ui_free_body)) }
+
+        divider(card)
+
+        itemRow(
+            card, R.drawable.ic_star,
+            getString(R.string.ui_title_update),
+            getString(R.string.ui_sub_update, versionName())
+        ) { checkUpdate() }
     }
 
     // ---------------- 组件 ----------------
@@ -343,13 +329,105 @@ class SettingsActivity : Activity() {
 
     private fun openLsposed() {
         val manager = "org.lsposed.manager"
-        val intent = packageManager.getLaunchIntentForPackage(manager)
-        if (intent != null) {
-            runCatching { startActivity(intent) }
+        val launcher = packageManager.getLaunchIntentForPackage(manager)
+        if (launcher != null) {
+            runCatching { startActivity(launcher) }
                 .onFailure { toast(getString(R.string.ui_need_lsposed)) }
-        } else {
-            toast(getString(R.string.ui_need_lsposed))
+            return
         }
+        // 个别系统上拿不到 launcher intent，退回显式组件
+        val explicit = Intent()
+            .setComponent(ComponentName(manager, "org.lsposed.manager.ui.activity.MainActivity"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { startActivity(explicit) }
+            .onFailure { toast(getString(R.string.ui_need_lsposed)) }
+    }
+
+    // ---------------- 检查更新 ----------------
+
+    private fun checkUpdate() {
+        toast(getString(R.string.ui_update_checking))
+        Thread {
+            val latest = runCatching { fetchLatestRelease() }.getOrNull()
+            runOnUiThread {
+                if (latest == null) {
+                    toast(getString(R.string.ui_update_failed))
+                    return@runOnUiThread
+                }
+                val (tag, body, url) = latest
+                if (compareVersion(tag, versionName()) <= 0) {
+                    showDialog(
+                        getString(R.string.ui_title_update),
+                        getString(R.string.ui_update_latest, versionName())
+                    )
+                    return@runOnUiThread
+                }
+                AlertDialog.Builder(this, R.style.Theme_LyricProvider_Dialog)
+                    .setTitle(getString(R.string.ui_update_found, tag))
+                    .setMessage(body.take(4000).ifBlank { url })
+                    .setNegativeButton(R.string.ui_dialog_close, null)
+                    .setPositiveButton(R.string.ui_update_go) { _, _ -> openRelease(url) }
+                    .show()
+            }
+        }.apply {
+            isDaemon = true
+            name = "xinghe-update-check"
+        }.start()
+    }
+
+    /** 只在用户点「检查更新」时访问一次 GitHub Release；模块本体不联网 */
+    private fun fetchLatestRelease(): Triple<String, String, String>? {
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = (URL(RELEASE_API).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 8000
+                readTimeout = 8000
+                setRequestProperty("User-Agent", "AstraGalaxy")
+                setRequestProperty("Accept", "application/vnd.github+json")
+            }
+            if (connection.responseCode !in 200..299) return null
+            val text = connection.inputStream.bufferedReader().use { it.readText() }
+            val json = JSONObject(text)
+            val tag = json.optString("tag_name").trim().removePrefix("v").removePrefix("V").trim()
+            if (tag.isEmpty()) return null
+            val body = json.optString("body").trim()
+            val url = json.optString("html_url").trim().ifBlank { RELEASE_PAGE }
+            Triple(tag, body, url)
+        } catch (t: Throwable) {
+            null
+        } finally {
+            runCatching { connection?.disconnect() }
+        }
+    }
+
+    private fun compareVersion(left: String, right: String): Int {
+        val a = left.split(VERSION_SEP).mapNotNull { it.toIntOrNull() }
+        val b = right.split(VERSION_SEP).mapNotNull { it.toIntOrNull() }
+        for (i in 0 until maxOf(a.size, b.size)) {
+            val x = a.getOrElse(i) { 0 }
+            val y = b.getOrElse(i) { 0 }
+            if (x != y) return x.compareTo(y)
+        }
+        return 0
+    }
+
+    private fun openRelease(url: String) {
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .onFailure { toast(url) }
+    }
+
+    private companion object {
+        private const val RELEASE_API =
+            "https://api.github.com/repos/2979208016/AstraGalaxy/releases/latest"
+        private const val RELEASE_PAGE =
+            "https://github.com/2979208016/AstraGalaxy/releases"
+        private val VERSION_SEP = Regex("[^0-9]+")
+    }
+
+    /** 让桌面 alias 的启用状态与开关保持一致（覆盖安装后 alias 会复位为启用） */
+    private fun syncLauncherIcon() {
+        val wantHidden = prefs.getBoolean(Constants.KEY_HIDE_ICON, false)
+        setLauncherIconHidden(wantHidden)
     }
 
     private fun setLauncherIconHidden(hidden: Boolean) {

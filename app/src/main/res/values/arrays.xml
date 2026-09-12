@@ -9,6 +9,7 @@
         <item>com.tencent.qqmusic</item>
         <item>com.netease.cloudmusic</item>
         <item>com.heytap.music</item>
+        <item>cn.toside.music.mobile</item>
     </string-array>
 
     <string-array name="lyricon_module_tags">

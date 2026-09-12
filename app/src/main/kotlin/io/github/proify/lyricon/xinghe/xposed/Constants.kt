@@ -11,6 +11,12 @@ object Constants {
     /** 本模块（LyricON Provider 提供端）包名 */
     const val PROVIDER_PACKAGE_NAME: String = "io.github.proify.lyricon.xinghe"
 
+    /** 诊断期：把 RN 桥上的候选字符串打到日志里 */
+    const val VERBOSE_BRIDGE: Boolean = false
+
+    /** 洛雪音乐助手 */
+    const val LX_PACKAGE: String = "cn.toside.music.mobile"
+
     /** 远程偏好（供设置页与目标进程共享） */
     const val PREFS_NAME: String = "xinghe_settings"
     const val KEY_ENABLED: String = "module_enabled"

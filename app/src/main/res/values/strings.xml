@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">星河</string>
+    <!-- 界面内显示的名字 -->
+    <string name="app_name">AstraGalaxy</string>
+    <!-- 桌面 / 启动器显示的名字 -->
+    <string name="app_name_launcher">星河</string>
 
-    <string name="xposed_description">星流的 LyricON 歌词提供者：离线读取酷狗音乐、酷狗概念版、波点音乐、QQ 音乐、网易云音乐、OPPO 音乐与 MeloYou 本地已有的歌词并提供给星流，由星流原生「胶囊歌词」呈现。</string>
+    <string name="xposed_description">AstraGalaxy · 星流的 LyricON 歌词提供者：离线优先读取播放器自己缓存好的歌词文件；读不到时，就在播放器进程内只读旁路嗅探它刚收到的网络歌词——okhttp 响应体，以及 React Native 应用的 Java→JS 歌词桥；解析出逐字与翻译后按 LyricON 协议推给星流，由星流原生「胶囊歌词」呈现。不修改播放器行为，不请求任何在线歌词接口。</string>
 
     <string name="lyricon_module_author">yiyi</string>
-    <string name="lyricon_module_description">星流的 LyricON 歌词提供者：离线读取播放器本地已有的歌词并提供给星流。支持酷狗音乐、酷狗概念版、波点音乐、QQ 音乐、网易云音乐、OPPO 音乐与 MeloYou。创作者：yiyi，免费公益。</string>
-
+    <string name="lyricon_module_description">AstraGalaxy · 星流的 LyricON 歌词提供者：离线优先读取播放器本地歌词文件，读不到时在播放器进程内只读旁路嗅探网络歌词与 JS 歌词桥。推荐作用域：酷狗音乐、酷狗概念版、波点音乐、QQ 音乐、网易云音乐、OPPO 音乐、MeloYou 与洛雪音乐助手；也可在 LSPosed 中自行勾选其它音乐应用。创作者：yiyi，免费公益。</string>
     <string name="module_author_display">创作者：yiyi</string>
     <string name="module_contact_display">QQ：2979208016</string>
     <string name="module_free_display">免费公益</string>
@@ -17,41 +19,39 @@
 
     <string name="ui_switch_enable">启用模块</string>
     <string name="ui_switch_hide">隐藏模块桌面图标</string>
-    <string name="ui_switch_hide_hint">需在 LSPosed 中关闭强制显示模块图标</string>
+    <string name="ui_switch_hide_hint">隐藏后仍可从 LSPosed 进入本页</string>
     <string name="ui_btn_lsposed">启动 LSPosed</string>
-    <string name="ui_btn_platforms">支持平台</string>
+    <string name="ui_btn_apps">适配应用</string>
 
-    <string name="ui_title_platforms">支持的应用</string>
-    <string name="ui_sub_platforms">%1$d 个平台 · 全部离线读取本地歌词</string>
-    <string name="ui_title_source">歌词来源</string>
-    <string name="ui_sub_source">播放器自己的本地歌词缓存，不联网</string>
-    <string name="ui_title_match">匹配策略</string>
-    <string name="ui_sub_match">歌名 / 歌手 / 歌曲 id / 时长多证据匹配，找不到自动重试</string>
+    <string name="ui_title_apps">适配应用</string>
+    <string name="ui_apps_body">酷狗音乐\n酷狗概念版\n波点音乐\nQQ 音乐\n网易云音乐\nOPPO / 欢太音乐\nMeloYou\n洛雪音乐助手（JS 歌词桥）\n\n其它应用：勾选作用域后自动尝试网络 / 桥接嗅探</string>
 
-    <string name="ui_title_about">关于星河</string>
-    <string name="ui_sub_about">它做什么，以及它不做什么</string>
+    <string name="ui_title_about">关于 AstraGalaxy</string>
+    <string name="ui_sub_about">离线优先，读不到再嗅探网络 / 歌词桥</string>
     <string name="ui_title_author">创作者</string>
     <string name="ui_sub_author">yiyi · QQ 2979208016</string>
     <string name="ui_title_free">免费公益</string>
     <string name="ui_sub_free">禁止倒卖，转载请注明出处</string>
 
+    <string name="ui_title_update">检查更新</string>
+    <string name="ui_sub_update">当前版本 v%1$s</string>
+    <string name="ui_update_checking">正在检查…</string>
+    <string name="ui_update_latest">已是最新版本 v%1$s</string>
+    <string name="ui_update_failed">检查失败，请检查网络</string>
+    <string name="ui_update_found">发现新版本 v%1$s</string>
+    <string name="ui_update_go">前往下载</string>
+
     <string name="ui_dialog_ok">知道了</string>
     <string name="ui_dialog_close">关闭</string>
 
-    <string name="ui_platforms_body">星河按 LyricON 协议向星流提供歌词，目前已适配：\n\n· 酷狗音乐 / 酷狗概念版（kugou/lyrics、kugou/temp_lyrics 的 KRC）\n· 波点音乐（cache/lyric 的 LRCX）\n· QQ 音乐（qqmusic/qrc 的 QRC）\n· 网易云音乐（LrcCache，文件名与内容自带歌曲 id）\n· OPPO / 欢太音乐（lyric 目录的 alm3ll）\n· MeloYou（播放器自身导出的歌词文件）\n\n以上平台均只读取各自 App 已经缓存好的歌词文件，因此需要该 App 之前播放或加载过这首歌。星河的适配范围会随版本更新，界面上的列表始终与代码里的适配表一致。</string>
-
-    <string name="ui_source_body">星河完全离线：它不请求任何在线歌词接口，也不内置任何歌词库。\n\n歌词来自播放器自己——你在这个 App 里能看到歌词，说明它已经把歌词存到了本地，星河只是把这些文件读出来交给星流。\n\n所以：App 里看不到歌词的歌曲，星河同样提供不了；反之只要能查到，星流上就会有。</string>
-
-    <string name="ui_match_body">切歌后星河会在播放器的歌词缓存目录里查找当前歌曲，并按下述证据打分，取分数最高的候选：\n\n· 正文 [ti:]/[ar:] 与当前歌名、歌手一致（最可靠）\n· 文件名或首行包含歌名（酷狗的「歌手 - 歌名-hash.krc」属于这一类）\n· 文件名或内容里的歌曲 id 与系统给出的 mediaId 一致\n· 文件写入时间接近切歌时刻\n· 歌词总时长与歌曲时长吻合\n\n播放器通常是「先切歌、后写歌词」，所以星河在切歌后的约 2 分钟内会按退避节奏反复重试，避免首次播放的歌曲漏词。</string>
-
-    <string name="ui_about_body">星河是星流（AstraFlow）的 LyricON「歌词提供者」。\n\n它只做一件事：把播放器本地已有的歌词按 LyricON 协议实时推送给星流，由星流原生「胶囊歌词」在流体云岛等位置呈现。\n\n星河自身没有任何播放界面、歌词渲染或悬浮窗，也不含联网逻辑；它不修改播放器行为，只做只读旁路。\n\n使用方法：安装后在 LSPosed 中启用星河并勾选要适配的音乐 App，重启对应 App，再在星流中开启「胶囊歌词」即可。</string>
+    <string name="ui_about_body">AstraGalaxy 是星流（AstraFlow）的 LyricON「歌词提供者」，按 LyricON 协议把歌词实时推给星流，由星流原生「胶囊歌词」在流体云岛等位置呈现。\n\n歌词优先来自播放器自己的本地缓存（酷狗、波点、QQ 音乐、网易云、OPPO 音乐、MeloYou），读不到时再在播放器进程里只读旁路嗅探它刚收到的网络歌词与 React Native 歌词桥，因此洛雪音乐助手这类只在内存里显示歌词的播放器也能用。\n\n它自身没有任何播放界面、歌词渲染或悬浮窗，不修改播放器行为，只做只读旁路。\n\n使用方法：在 LSPosed 中启用本模块并勾选要适配的音乐 App（推荐作用域已默认勾选，也可以自行添加），重启对应 App，再在星流中开启「胶囊歌词」。</string>
 
     <string name="ui_author_body">创作者：yiyi\n联系 QQ：2979208016\n\n本项目免费公益，禁止任何形式的倒卖与付费代装。\n如果它对你有帮助，欢迎把问题与建议反馈给我。</string>
 
-    <string name="ui_free_body">星河免费开源，遵循 MIT 许可。\n\n请勿用于任何商业用途或二次售卖；转载请注明出处并保留作者信息。</string>
+    <string name="ui_free_body">AstraGalaxy 免费开源，遵循 MIT 许可。\n\n请勿用于任何商业用途或二次售卖；转载请注明出处并保留作者信息。</string>
 
     <string name="ui_need_lsposed">未检测到 LSPosed 管理器</string>
-    <string name="ui_hide_on">已隐藏桌面图标，入口仍可从 LSPosed 进入</string>
+    <string name="ui_hide_on">已隐藏桌面图标，仍可从 LSPosed 进入</string>
     <string name="ui_hide_off">已恢复桌面图标</string>
     <string name="ui_enable_on">模块已启用，重启目标应用生效</string>
     <string name="ui_enable_off">模块已停用</string>

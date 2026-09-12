@@ -20,17 +20,18 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 通用「本地歌词」提供者。
+ * 通用歌词提供者。两条通道，先本地、后网络：
  *
- * 流程：
- *  1. 每个已勾选进程都挂 MediaSession 钩子；
- *  2. **谁真正收到回调，谁才创建 Provider**（见 [ensureProvider]）——避免多进程重复注册，
- *     这是参考实现 LyricProvider 明确规避的坑；
- *  3. 拿到 曲名/歌手/时长/mediaId 后，到宿主 App 自己的歌词缓存里按证据强度匹配歌词；
- *  4. 匹配到就 setSong 推给 SystemUI/星流，并同步播放状态。
+ *  1. **本地缓存**（已适配平台）：读宿主 App 自己缓存好的歌词文件，
+ *     先用落盘索引找，找不到再按证据强度扫目录；
+ *  2. **网络旁路**（通用）：在宿主进程里嗅探它刚收到的网络歌词，
+ *     给「只在内存里显示歌词」的播放器兜底。
  *
- * 匹配不中会按退避节奏重试：播放器普遍是「先切歌、后拉歌词落盘」，
- * 只在切歌瞬间查一次必然大量漏词。
+ * 其它约定：
+ *  - 每个已勾选进程都挂 MediaSession 钩子，**谁真正收到回调谁才创建 Provider**，
+ *    避免多进程重复注册；
+ *  - 切歌后按退避节奏重试约 2 分钟（播放器普遍「先切歌、后拉歌词」）；
+ *  - 两条通道都拿不到歌词时，兜底推送「歌名 - 歌手」，让星流至少有信息可显示。
  */
 internal class LocalLyricProvider(
     private val module: XposedModule,
@@ -38,7 +39,7 @@ internal class LocalLyricProvider(
     private val classLoader: ClassLoader,
     private val hostPackage: String,
     private val processName: String,
-    private val recipe: LocalRecipe
+    private val recipe: LocalRecipe?
 ) {
 
     private val stateLock = Any()
@@ -62,7 +63,15 @@ internal class LocalLyricProvider(
     @Volatile
     private var lyricFound = false
 
+    /** 兜底歌曲信息是否已经推送过 */
+    @Volatile
+    private var fallbackSent = false
+
     private val attemptIndex = AtomicInteger(0)
+
+    /** 最近一次嗅到的歌词：洛雪这类播放器会「先给歌词、后报歌曲信息」 */
+    @Volatile
+    private var pendingLyric: Triple<LocalLyric, String, Long>? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -73,9 +82,14 @@ internal class LocalLyricProvider(
     private val retryTask = Runnable { tryLookup() }
 
     fun installHooks() {
+        installRnBridge()
         hookApplicationLifecycle()
         hookMediaSession()
-        logger.info("Local lyric hooks installed for $hostPackage (${recipe.displayName}) in $processName")
+        installSniffer()
+        logger.info(
+            "Local lyric hooks installed for $hostPackage " +
+                "(${recipe?.displayName ?: "通用嗅探"}) in $processName"
+        )
     }
 
     // ---------------- Provider（惰性注册） ----------------
@@ -107,7 +121,7 @@ internal class LocalLyricProvider(
                     processName = processName
                 ).apply {
                     player.setDisplayTranslation(true)
-                    player.setDisplayRoma(false)
+                    player.setDisplayRoma(true)
                     register()
                 }
                 provider = created
@@ -139,6 +153,40 @@ internal class LocalLyricProvider(
         installProtectiveAfterHook(method, "Instrumentation.callApplicationOnCreate") { chain, _ ->
             val hostApplication = chain.args.getOrNull(0) as? Application
             if (hostApplication != null) application = hostApplication
+        }
+    }
+
+    // ---------------- 网络旁路 ----------------
+
+    private fun installSniffer() {
+        runCatching {
+            HttpLyricSniffer(module, logger, classLoader) { lyric, source ->
+                onNetworkLyric(lyric, source)
+            }.install()
+        }.onFailure { logger.error("网络歌词嗅探挂载失败", it) }
+    }
+
+    /** React Native 播放器（洛雪这类）：歌词模块 + JS 桥出口 */
+    private fun installRnBridge() {
+        runCatching {
+            RnLyricBridge(module, logger, classLoader) { lyric, source -> onNetworkLyric(lyric, source) }.install()
+        }.onFailure { logger.error("RN 歌词嗅探挂载失败", it) }
+    }
+
+    private fun onNetworkLyric(lyric: LocalLyric, source: String) {
+        pendingLyric = Triple(lyric, source, SystemClock.elapsedRealtime())
+        val signature = currentSignature ?: return
+        if (lyricFound) return
+        val parts = signature.split('|')
+        val title = parts.getOrNull(0).orEmpty()
+        if (title.isBlank()) return
+        val artist = parts.getOrNull(1)?.takeIf { it.isNotBlank() && it != "null" }
+        val duration = parts.getOrNull(2)?.toLongOrNull() ?: 0L
+        val mediaId = parts.getOrNull(3)?.takeIf { it.isNotBlank() && it != "null" }
+        logger.info("[$source] 嗅到歌词：${lyric.lines.size} 行，标题=<${lyric.title ?: lyric.firstLine}>")
+        mainHandler.post {
+            if (currentSignature != signature || lyricFound) return@post
+            publish(title, artist, duration, mediaId, lyric.lines, source)
         }
     }
 
@@ -187,6 +235,7 @@ internal class LocalLyricProvider(
 
         currentMediaId = mediaId
         lyricFound = false
+        fallbackSent = false
         attemptIndex.set(0)
 
         val registered = ensureProvider()
@@ -197,6 +246,7 @@ internal class LocalLyricProvider(
         runCatching { registered.player.setPosition(0L) }
 
         logger.info("Metadata changed: $title - $artist ($duration) id=$mediaId in $processName")
+        publishPending(title, artist, duration, mediaId)
         mainHandler.removeCallbacks(retryTask)
         mainHandler.post(retryTask)
     }
@@ -208,7 +258,7 @@ internal class LocalLyricProvider(
         runCatching { registered.player.setPlaybackState(state) }
     }
 
-    // ---------------- 本地歌词查找（带退避重试） ----------------
+    // ---------------- 歌词查找（本地缓存 + 退避重试） ----------------
 
     private fun tryLookup() {
         if (lyricFound) return
@@ -222,6 +272,15 @@ internal class LocalLyricProvider(
 
         val index = attemptIndex.getAndIncrement()
         val delay = RETRY_DELAYS_MS.getOrElse(index) { RETRY_DELAYS_MS.last() }
+        val lastAttempt = index >= RETRY_DELAYS_MS.size
+
+        val localRecipe = recipe
+        if (localRecipe == null) {
+            // 没有本地配方：全程等网络嗅探，窗口结束还没等到就兜底推歌曲信息
+            if (lastAttempt) publishFallback(title, artist, duration, mediaId)
+            else mainHandler.postDelayed(retryTask, delay)
+            return
+        }
 
         lookupExecutor.execute {
             val context = application ?: currentApplication()
@@ -231,8 +290,8 @@ internal class LocalLyricProvider(
             }
             val started = SystemClock.elapsedRealtime()
             val lines = try {
-                LocalLyricFinder.find(context, recipe, title, artist, duration, mediaId) {
-                    logger.info("[${recipe.displayName}] $it")
+                LocalLyricFinder.find(context, localRecipe, title, artist, duration, mediaId) {
+                    logger.info("[${localRecipe.displayName}] $it")
                 }
             } catch (t: Throwable) {
                 logger.error("Local lyric lookup failed: ${t.message}", t)
@@ -247,10 +306,15 @@ internal class LocalLyricProvider(
                     return@execute
                 }
                 lyricFound = true
-                publish(title, artist, duration, mediaId, lines)
+                mainHandler.post { publish(title, artist, duration, mediaId, lines, localRecipe.displayName) }
+                return@execute
             }
             if (!lyricFound && currentSignature == signature) {
-                mainHandler.postDelayed(retryTask, delay)
+                if (lastAttempt) {
+                    mainHandler.post { publishFallback(title, artist, duration, mediaId) }
+                } else {
+                    mainHandler.postDelayed(retryTask, delay)
+                }
             }
         }
     }
@@ -260,7 +324,8 @@ internal class LocalLyricProvider(
         artist: String?,
         durationMs: Long,
         mediaId: String?,
-        lyrics: List<RichLyricLine>
+        lyrics: List<RichLyricLine>,
+        source: String
     ) {
         val registered = ensureProvider()
         if (registered == null) {
@@ -281,16 +346,54 @@ internal class LocalLyricProvider(
             this.duration = if (durationMs > 0) durationMs else lastEnd
             this.lyrics = lines
         }
+        val words = lines.count { !it.words.isNullOrEmpty() }
+        val translated = lines.count { !it.translation.isNullOrBlank() }
         val ok = try {
             registered.player.setSong(song)
         } catch (t: Throwable) {
             logger.error("setSong threw", t)
             false
         }
+        lyricFound = true
         logger.info(
-            "Local lyric published: $title, ${lines.size} lines, id=${song.id}, " +
+            "Lyric published from $source: $title, ${lines.size} lines " +
+                "(逐字 $words 行, 翻译 $translated 行), id=${song.id}, " +
                 "duration=${song.duration}, active=${registered.player.isActive}, ok=$ok"
         )
+    }
+
+    /** 两条通道都没歌词时的兜底：只推歌曲信息，至少让星流有东西可显示 */
+    /** 歌词先到、歌曲信息后到：把缓存的那份拿出来用 */
+    private fun publishPending(title: String, artist: String?, durationMs: Long, mediaId: String?) {
+        val cached = pendingLyric ?: return
+        val (lyric, source, at) = cached
+        val age = SystemClock.elapsedRealtime() - at
+        if (age > PENDING_TTL_MS) {
+            pendingLyric = null
+            return
+        }
+        val sniffed = lyric.title?.let { LocalLyricFinder.normalize(it) }.orEmpty()
+        val want = LocalLyricFinder.normalize(title)
+        val matched = sniffed.isNotEmpty() &&
+            (sniffed == want || sniffed.contains(want) || want.contains(sniffed))
+        if (!matched && age > PENDING_QUICK_MS) return
+        logger.info("[$source] 使用缓存歌词（${age}ms 前嗅到，匹配=$matched）")
+        publish(title, artist, durationMs, mediaId, lyric.lines, source)
+    }
+
+    private fun publishFallback(title: String, artist: String?, durationMs: Long, mediaId: String?) {
+        if (lyricFound || fallbackSent) return
+        val registered = ensureProvider() ?: return
+        fallbackSent = true
+        val song = Song().apply {
+            id = mediaId ?: title
+            name = title
+            this.artist = artist
+            this.duration = durationMs
+            this.lyrics = emptyList()
+        }
+        val ok = runCatching { registered.player.setSong(song) }.getOrDefault(false)
+        logger.info("无歌词兜底：推送歌曲信息 $title - $artist, ok=$ok")
     }
 
     /**
@@ -312,9 +415,22 @@ internal class LocalLyricProvider(
             if (end <= line.begin) end = line.begin + 1
             line.end = end
             line.duration = end - line.begin
+            clampWords(line)
             out.add(line)
         }
         return out
+    }
+
+    /** 逐字时间也要收进本行范围内，否则星流侧的逐字进度会跑飞 */
+    private fun clampWords(line: RichLyricLine) {
+        val words = line.words ?: return
+        for (word in words) {
+            if (word.begin < line.begin) word.begin = line.begin
+            if (word.end <= word.begin) word.end = word.begin + 1
+            if (word.end > line.end) word.end = line.end
+            if (word.end <= word.begin) word.end = word.begin + 1
+            word.duration = word.end - word.begin
+        }
     }
 
     // ---------------- 工具 ----------------
@@ -343,6 +459,9 @@ internal class LocalLyricProvider(
     }
 
     companion object {
+        /** 缓存歌词的有效期与「快速窗口」 */
+        private const val PENDING_TTL_MS = 90_000L
+        private const val PENDING_QUICK_MS = 15_000L
         /**
          * 重试节奏（毫秒，每项是「这一次查完后再等多久」）。
          * 总窗口约 2 分钟，足够覆盖播放器拉取歌词并落盘的过程。

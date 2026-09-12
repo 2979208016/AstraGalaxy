@@ -1,4 +1,4 @@
-# 星河（星流附属模块）作用域
+# AstraGalaxy 推荐作用域（作用域开放：staticScope=false，用户可在 LSPosed 中自行增删）
 # MeloYou（原生歌词文件）
 com.music
 # 本地歌词缓存适配
@@ -8,3 +8,6 @@ cn.wenyu.bodian
 com.tencent.qqmusic
 com.netease.cloudmusic
 com.heytap.music
+
+# 洛雪音乐助手（歌词模块 / JS 桥）
+cn.toside.music.mobile

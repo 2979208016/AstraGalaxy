@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 仅用于设置页里的「检查更新」；模块本体不联网 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        包可见性：Android 11+ 默认看不到其它应用，
+        不加这段 getLaunchIntentForPackage("org.lsposed.manager") 会返回 null，
+        界面就会误报「未检测到 LSPosed」。
+    -->
+    <queries>
+        <package android:name="org.lsposed.manager" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:description="@string/xposed_description"
@@ -10,19 +22,30 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.LyricProvider">
 
+        <!--
+            设置页本体：始终启用。
+            除了桌面 alias，这里额外声明 MAIN + CATEGORY_INFO，
+            这样即使桌面图标被隐藏（alias 被禁用），
+            LSPosed 仍能用 getLaunchIntentForPackage 找到并打开本页。
+        -->
         <activity
             android:name=".ui.SettingsActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.LyricProvider" />
+            android:theme="@style/Theme.LyricProvider">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.INFO" />
+            </intent-filter>
+        </activity>
 
-        <!-- 桌面入口用 alias，方便「隐藏模块桌面图标」开关 -->
+        <!-- 桌面入口用 alias：桌面显示的名字只由这里决定 -->
         <activity-alias
             android:name=".ui.LauncherAlias"
             android:enabled="true"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:label="@string/app_name"
+            android:label="@string/app_name_launcher"
             android:roundIcon="@mipmap/ic_launcher_round"
             android:targetActivity=".ui.SettingsActivity"
             android:theme="@style/Theme.LyricProvider">
@@ -59,6 +82,7 @@
         <meta-data
             android:name="xposedminversion"
             android:value="82" />
+        <!-- 推荐作用域：作用域开放（staticScope=false），用户可自行增删 -->
         <meta-data
             android:name="xposedscope"
             android:resource="@array/xposed_scope" />

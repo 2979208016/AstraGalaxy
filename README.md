@@ -1,114 +1,92 @@
-# 星河 (XingHe)
+# AstraGalaxy
 
 > 星流（AstraFlow）的 LyricON 歌词提供者
-> —— 离线读取播放器本地已有的歌词并提供给星流，由星流原生「胶囊歌词」呈现。
+> 把当前播放歌曲的歌词按 LyricON 协议推给星流，由星流原生「胶囊歌词」呈现。
 
 ---
 
 ## 简介
 
-星河 是 [LyricON](https://github.com/Proify/lyricon) 生态中的「歌词提供者」（Provider）模块，基于 **libxposed**（LSPosed 101+）实现。
+AstraGalaxy 是 [LyricON](https://github.com/Proify/lyricon) 生态中的「歌词提供者」（Provider），基于 **libxposed**（LSPosed 101+）实现。
 
-它只做一件事：把当前播放歌曲的歌词按 LyricON 协议实时推送给星流，由星流原生「胶囊歌词」负责在流体云岛等位置呈现。
+它只做一件事：把当前播放歌曲的歌词按 LyricON 协议实时推送给星流。自身没有播放界面、没有歌词渲染、没有悬浮窗，不修改播放器行为，是纯只读旁路。
 
-**完全离线**：不请求任何在线歌词接口，只读取播放器自己缓存的歌词文件；本地没有歌词就什么都不推送。
+## 功能
+
+- **本地歌词优先**：读播放器自己缓存好的歌词文件，离线可用；
+- **网络歌词旁路**：本地没有时，在播放器进程里只读嗅探它刚收到的网络歌词——洛雪音乐助手这类只在内存里显示歌词、不落盘的播放器也能用；
+- **逐字歌词**：KRC / QRC / 网易云 yrc 的字级时间轴会一并推送；
+- **翻译与音译**：网易云 tlyric / 音译字段随行推送；
+- **歌词索引**：把「歌曲 id / 歌名 / 歌手 → 文件」记在播放器自己的缓存目录里，二次切歌直接定位，不再重扫目录；
+- **元数据兜底**：两条通道都没拿到歌词时，推送「歌名 - 歌手 - 时长」；
+- **作用域开放**：推荐作用域已列好常用平台，也可以在 LSPosed 里自行勾选任意音乐应用。
 
 ## 支持
 
-| 应用 | 包名 | 本地歌词来源 |
+| 应用 | 包名 | 歌词来源 |
 | --- | --- | --- |
-| MeloYou | `com.music` | `files/songLyric.json`（播放器自身导出） |
+| MeloYou | `com.music` | `files/songLyric.json` |
 | 酷狗音乐 | `com.kugou.android` | `kugou/lyrics`、`kugou/temp_lyrics` 的 KRC |
 | 酷狗概念版 | `com.kugou.android.lite` | 同上 |
 | 波点音乐 | `cn.wenyu.bodian` | `cache/lyric` 的 LRCX |
 | QQ 音乐 | `com.tencent.qqmusic` | `qqmusic/qrc` 的 QRC |
 | 网易云音乐 | `com.netease.cloudmusic` | `LrcCache`（文件名与内容自带歌曲 id） |
 | 欢太 / OPPO 音乐 | `com.heytap.music` | `lyric` 目录的 alm3ll |
+| 洛雪音乐助手 | `cn.toside.music.mobile` | JS 歌词桥（歌词模块 + 自定义音源回调） |
 
-歌词来自各 App 自身的本地缓存，因此**需要该 App 之前播放或加载过这首歌的歌词**（在 App 里能看到歌词即可）。
+上面这些平台都不需要额外配置；没列出来的应用勾选作用域后同样会尝试网络 / 桥接嗅探。
 
-新增平台：在 `Constants.LOCAL_RECIPES` 里加一条配方（目录 + 格式），再把包名加进 `scope.list` 与 `arrays.xml`。
+## 实现方式
 
-## 原理
+歌词一共三条来路，优先级从近到远：
 
-```
-┌──────────────┐  本地歌词缓存   ┌────────────────┐  LyricON 协议   ┌──────────┐
-│  音乐 App    │ ──────────────▶│ 星河            │ ───────────────▶│ 星流      │
-│ (MediaSession)│  直接读取      │ (LocalLyric)   │   实时推送歌词   │ (胶囊歌词)│
-└──────────────┘                └────────────────┘                 └──────────┘
-```
+1. **本地缓存文件**：按平台配方（目录 + 格式）读取，KRC、QRC、LRC、LRCX、alm3ll、网易云 yrc 与 JSON 包装都能解析；
+2. **落盘索引**：解析成功的文件会记进播放器 `cacheDir` 下的索引，之后同名 / 同 id 的歌直接命中，不再扫目录；
+3. **网络旁路嗅探**（通用，两条腿）：
+   - **HTTP**：挂 `okhttp3.ResponseBody#string()/#bytes()` 的后置钩子，只读返回值；
+   - **JS 桥**：React Native 播放器（洛雪音乐助手）的歌词只在 JS 内存里流转，HTTP 层也被改名，于是改在「Java → JS」的必经出口上只读返回值——歌词模块 `play/setLyric`、自定义音源回调、`PromiseImpl#resolve`、`CatalystInstanceImpl#callFunction`、`CxxCallbackImpl/CallbackImpl#invoke`、`ReactContext#emitDeviceEvent`。
 
-- **入口**：`HookEntry`（`XposedModule`），按目标进程分派
-- **MeloYou**：`XingHeLyricProvider` 读取播放器写入的歌词文件并按协议推送
-- **其他平台**：`LocalLyricProvider` 监听 `MediaSession` 元数据 → `LocalLyricFinder` 在 App 自己的歌词缓存目录里匹配
-- **解析**：`LyricLocal`（KRC / QRC / LRC / 网易云缓存），`Qrc.kt`（QQ QRC 的 3DES 解密）
+所有旁路都只读：不拦截、不改写、不阻断，认不出歌词形状就什么都不做，对播放器性能与行为零影响。歌词先到、歌曲信息后到时，会先缓存再按歌名匹配后补推。
 
-### 匹配策略
-
-切歌后会在歌词缓存目录里查找当前歌曲，按下述证据打分，取分数最高的候选：
-
-- 正文 `[ti:]`/`[ar:]` 与当前歌名、歌手一致（最可靠）
-- 文件名或首行包含歌名（酷狗的「歌手 - 歌名-hash.krc」属于这一类）
-- 文件名或内容里的歌曲 id 与系统给出的 `mediaId` 一致
-- 文件写入时间接近切歌时刻
-- 歌词总时长与歌曲时长吻合
-
-播放器通常是「先切歌、后写歌词」，所以星河在切歌后的约 2 分钟内会按退避节奏反复重试，避免首次播放的歌曲漏词。
-
-## 应用界面
-
-模块内置一个简洁的设置页（`SettingsActivity`），与歌词推送共用同一份开关状态：
-
-- **开关**：启用模块、隐藏桌面图标
-- **快捷入口**：启动 LSPosed、查看支持平台
-- **说明卡片**：支持的应用 / 歌词来源 / 匹配策略 / 关于星河 / 创作者 / 免费公益
-
-界面上的「支持应用」列表与代码里的适配表始终一致，每次更新都会同步调整。
-
-## 下载
-
-前往 [Releases](https://github.com/2979208016/XingHe-AstraFlow-Provider/releases) 下载最新 APK 直接安装使用。
-
-## 开源说明
-
-本仓库开源的是**应用本体源码**——即 `app/src` 下的 Kotlin 代码、资源文件与 libxposed 模块声明，供学习与二次修改。
-
-构建配置（Gradle 脚本）与第三方构建工具不属于本项目所有，故未包含在仓库中；如需自行编译，请自备构建环境。
+模块本体**不请求任何在线歌词接口**：歌词要么来自播放器自己缓存的文件，要么来自播放器自己刚收到的响应。
 
 ## 安装 & 使用
 
-1. 设备需已安装 **星流（AstraFlow）** 与 **LSPosed**
-2. 安装本模块 APK，在 LSPosed 中**启用星河**并勾选需要歌词的音乐应用
-3. 重启目标音乐应用
-4. 在**星流**中开启「胶囊歌词」，播放音乐即可看到歌词上岛
+1. 在 LSPosed 中启用 AstraGalaxy，并勾选要适配的音乐 App（推荐作用域已默认勾选洛雪音乐助手等常用平台，也可以自行添加）；
+2. 重启目标音乐 App；
+3. 在星流里开启「胶囊歌词」。
+
+如果只看到歌名和歌手、没有歌词，说明这首歌本地缓存和网络旁路都没拿到歌词——那是兜底信息，不是故障。
+
+## 应用界面
+
+设置页只有一个开关卡和一个关于卡：
+
+- 启用模块、隐藏模块桌面图标；
+- 「启动 LSPosed」跳到管理器，「适配应用」列出支持情况；
+- 「检查更新」只在点击时访问一次 GitHub Release，模块本体仍不联网。
 
 ## 项目结构
 
 ```
 app/src/main/
 ├── kotlin/io/github/proify/lyricon/xinghe/
-│   ├── ui/SettingsActivity.kt          # 模块设置 / 说明页
-│   └── xposed/
-│       ├── HookEntry.kt                # libxposed 入口与分派
-│       ├── Constants.kt                # 常量与各平台本地歌词配方
-│       ├── ModuleLogger.kt             # 日志
-│       ├── XingHeLyricProvider.kt      # MeloYou 歌词提供者
-│       ├── LocalLyricProvider.kt       # 通用本地歌词提供者
-│       ├── LyricLocal.kt               # 本地缓存解析与匹配
-│       └── Qrc.kt                      # QQ QRC 解密（3DES）
-├── res/                                # 资源（含界面图标与背景）
-└── resources/META-INF/xposed/          # 模块声明（scope / module.prop / java_init）
+│   ├── xposed/
+│   │   ├── HookEntry.kt          模块入口与作用域过滤
+│   │   ├── Constants.kt          平台配方、包名与常量
+│   │   ├── LocalLyricProvider.kt 媒体会话监听、歌词投递与调度
+│   │   ├── LyricLocal.kt         各平台歌词格式解析（KRC/QRC/LRC/yrc/JSON）
+│   │   ├── LyricIndex.kt         歌词文件索引
+│   │   ├── HttpLyricSniffer.kt   okhttp 响应体只读旁路
+│   │   ├── RnLyricBridge.kt      React Native 歌词桥只读旁路
+│   │   ├── ModuleLogger.kt       日志
+│   │   └── Qrc.kt                QRC 解密
+│   └── ui/SettingsActivity.kt    设置页
+├── res/values/arrays.xml         推荐作用域
+└── resources/META-INF/xposed/    模块声明与作用域
 ```
 
-## 更新日志
-
-### v1.3
-- **界面重做**：设置页改为卡片式布局，新增支持平台、歌词来源、匹配策略等说明
-- **歌词提供者修复**：多来源查找 + 多证据匹配 + 切歌后自动重试，解决只推歌名歌手、或完全不推送的问题
-- 支持范围与界面文案随版本同步更新
-
-### v1.1
-- 移除在线歌词接口，改为完全读取本地缓存
+新增平台：在 `Constants.LOCAL_RECIPES` 里加一条配方（目录 + 格式），再把包名加进 `scope.list` 与 `arrays.xml`；如果它走网络或 JS 桥，则不需要配方。
 
 ## 致谢
 
@@ -118,8 +96,8 @@ app/src/main/
 
 ## 许可
 
-本项目基于 MIT 开源，详见 [LICENSE](LICENSE)。
+MIT License。免费公益，禁止倒卖与付费代装。
 
 ## 关于
 
-免费公益 · 创作者 yiyi · QQ：2979208016
+创作者：yiyi · QQ 2979208016
