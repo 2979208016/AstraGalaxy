@@ -408,7 +408,30 @@ internal object LyricParsers {
 
     // ---------------- 工具 ----------------
 
-    private fun isPlaceholder(text: String): Boolean = PLACEHOLDER.any { text.contains(it) }
+    /** 明显不是歌词的内容（JSON/代码/标签残留），用于拦截 {"re":…} 这类脏数据 */
+    fun looksLikeNoise(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty()) return true
+        if (t.startsWith("{") || t.startsWith("}") || t.startsWith("[") ||
+            t.startsWith("]") || (t.startsWith("<") && t.endsWith(">"))
+        ) return true
+        if (t.contains("\":") || t.contains(":\"") || t.contains("://") ||
+            t.contains("\\u") || t.contains("&quot;")
+        ) return true
+        var ascii = 0
+        var punct = 0
+        for (c in t) {
+            if (c.code < 128) {
+                ascii++
+                if (!c.isLetterOrDigit() && !c.isWhitespace()) punct++
+            }
+        }
+        if (ascii == t.length && punct >= 6 && punct * 3 > t.length) return true
+        return false
+    }
+
+    private fun isPlaceholder(text: String): Boolean =
+        looksLikeNoise(text) || PLACEHOLDER.any { text.contains(it) }
 
     /**
      * 从首行猜「歌名 - 歌手」。

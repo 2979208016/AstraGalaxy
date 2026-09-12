@@ -110,7 +110,9 @@ internal class XingHeLyricProvider(
         hookApplicationLifecycle()
         hookMediaSession()
         hookMeloYouFiles()
+        hookApplicationOnCreate()
         logger.info("All MeloYou hooks installed")
+        mainHandler.postDelayed({ ensureStarted() }, 700L)
     }
 
     // ---------------- 应用生命周期 ----------------
@@ -126,25 +128,76 @@ internal class XingHeLyricProvider(
         }
     }
 
+    /** 备用启动点：部分 ROM/加固不走 Instrumentation#callApplicationOnCreate */
+    private fun hookApplicationOnCreate() {
+        runCatching {
+            val onCreate = Application::class.java.getDeclaredMethod("onCreate")
+            installProtectiveAfterHook(onCreate, "Application.onCreate") { chain, _ ->
+                val app = chain.thisObject as? Application
+                if (app != null && app.packageName == Constants.PLAYER_PACKAGE_NAME) {
+                    if (application == null) application = app
+                    ensureStarted(app)
+                }
+            }
+        }.onFailure { logger.warn("Application.onCreate hook unavailable: ${it.message}") }
+    }
+
     private fun onApplicationCreated(hostApplication: Application) {
-        application = hostApplication
+        if (application == null) application = hostApplication
         logger.info("MeloYou Application created: ${hostApplication.packageName}")
-        try {
-            setupProvider(hostApplication)
-        } catch (throwable: Throwable) {
-            logger.error("Provider initialization failed", throwable)
+        ensureStarted(hostApplication)
+    }
+
+    private var startAttempts = 0
+
+    /**
+     * 惰性启动。
+     *
+     * 有些 ROM／加固会绕开 Instrumentation#callApplicationOnCreate，
+     * 只依赖那个回调会让 Provider 永远不注册（表现为「歌词完全失效」）。
+     * 这里不赌单一回调：Instrumentation、Application#onCreate、
+     * MeloYou 写文件时传入的 Context 三处都会来启动，谁先到谁生效。
+     */
+    private fun ensureStarted(context: Context? = null) {
+        if (provider != null) return
+        val ctx = application ?: context?.applicationContext ?: context ?: currentApplication()
+        if (ctx == null) {
+            if (startAttempts++ < 20) {
+                logger.info("ensureStarted: 暂时拿不到 Context（第 ${startAttempts} 次），稍后重试")
+                mainHandler.postDelayed({ ensureStarted() }, 1500L)
+            }
             return
         }
-        replayFromDisk(hostApplication)
+        if (application == null) {
+            application = ctx.applicationContext as? Application ?: (ctx as? Application)
+        }
+        if (provider == null) {
+            try {
+                setupProvider(ctx)
+            } catch (throwable: Throwable) {
+                logger.error("Provider initialization failed", throwable)
+                return
+            }
+        }
+        replayFromDisk(ctx)
         mainHandler.removeCallbacks(progressTicker)
         mainHandler.post(progressTicker)
     }
 
-    private fun setupProvider(hostApplication: Application) {
+    /** 拿不到 Application 实例时的兜底（任何进程只要 Application 已创建就能拿到） */
+    private fun currentApplication(): Application? = try {
+        Class.forName("android.app.ActivityThread")
+            .getMethod("currentApplication")
+            .invoke(null) as? Application
+    } catch (throwable: Throwable) {
+        null
+    }
+
+    private fun setupProvider(context: Context) {
         val created = LyriconFactory.createProvider(
-            context = hostApplication,
+            context = context,
             providerPackageName = Constants.PROVIDER_PACKAGE_NAME,
-            playerPackageName = hostApplication.packageName,
+            playerPackageName = context.packageName,
             logo = ProviderLogo.fromSvg(Constants.ICON)
         ).apply {
             player.setDisplayTranslation(true)
@@ -152,7 +205,7 @@ internal class XingHeLyricProvider(
             register()
         }
         provider = created
-        logger.info("Lyricon provider registered, player=${hostApplication.packageName}")
+        logger.info("Lyricon provider registered, player=${context.packageName}")
     }
 
     // ---------------- 进度推算 ----------------
@@ -226,6 +279,7 @@ internal class XingHeLyricProvider(
         val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)
             ?.takeIf { it.isNotBlank() && it != "未知歌手" }
 
+        ensureStarted()
         val signature = "$title|$artist"
         if (signature == lastMetadataSignature) return
         lastMetadataSignature = signature
@@ -237,6 +291,7 @@ internal class XingHeLyricProvider(
                 lyricForCurrentSong = null
                 currentSongId = null
                 lastPublishedSignature = null
+                lastSongSwitchWall = System.currentTimeMillis()
             }
             currentMeta = SongMeta(
                 id = if (sameSong) currentMeta?.id else null,
@@ -246,6 +301,7 @@ internal class XingHeLyricProvider(
             )
         }
 
+        publishPlaceholder()
         meloAttempts = 0
         mainHandler.removeCallbacks(meloRetry)
         mainHandler.post(meloRetry)
@@ -300,6 +356,7 @@ internal class XingHeLyricProvider(
     private fun onPlaybackStateChanged(state: PlaybackState?) {
         state ?: return
 
+        ensureStarted()
         val position = state.position
         val newPlaying = state.state == PlaybackState.STATE_PLAYING
 
@@ -419,6 +476,7 @@ internal class XingHeLyricProvider(
         // 切歌：记录切歌时刻（用于忽略旧 position 残留），并重置进度锚点归零
         if (songChanged) {
             lastSongSwitchRealtime = SystemClock.elapsedRealtime()
+            lastSongSwitchWall = System.currentTimeMillis()
             anchorPosition = 0L
             anchorRealtime = SystemClock.elapsedRealtime()
             hasAnchor = true
@@ -429,6 +487,7 @@ internal class XingHeLyricProvider(
             } catch (throwable: Throwable) {
                 logger.error("Reset position failed", throwable)
             }
+            publishPlaceholder()
             logger.debug("Song changed, reset anchor position to 0")
         }
 
@@ -442,16 +501,10 @@ internal class XingHeLyricProvider(
 
         val lines = parseMeloYouLyrics(text) ?: return
 
-        // 防止把上一首的歌词推给当前歌曲（songLyric.json 只保存最近一首）
-        val wantTitle = currentMeta?.name
-        if (!wantTitle.isNullOrBlank()) {
-            val head = normalize(lines.firstOrNull()?.text)
-            if (head.isNotEmpty() && !head.contains(normalize(wantTitle))) {
-                logger.info("忽略不匹配的 MeloYou 歌词（当前=$wantTitle）")
-                return
-            }
+        if (!belongsToCurrentSong(lines)) {
+            logger.info("忽略不匹配的 MeloYou 歌词（当前=${currentMeta?.name}）")
+            return
         }
-
         synchronized(stateLock) {
             lyricForCurrentSong = lines
         }
@@ -464,6 +517,71 @@ internal class XingHeLyricProvider(
     }
 
     // ---------------- 数据装配与发布 ----------------
+
+    /** 上一次切歌的挂钟时刻（用于判断 songLyric.json 是否是本次切歌后写的） */
+    @Volatile
+    private var lastSongSwitchWall: Long = 0L
+
+    /** 占位快照签名，避免重复推送 */
+    private var lastPlaceholderSignature: String? = null
+
+    /** 切歌时先推「只有歌曲信息、没有歌词」的快照，清掉上一首的歌词 */
+    private fun publishPlaceholder() {
+        val p = provider ?: return
+        val meta = synchronized(stateLock) { currentMeta } ?: return
+        val id = meta.id ?: return
+        val signature = "$id|${meta.name}|${meta.artist}"
+        if (signature == lastPlaceholderSignature) return
+        lastPlaceholderSignature = signature
+        val song = Song().apply {
+            this.id = "meloyou:$id"
+            this.name = meta.name
+            this.artist = meta.artist
+            this.duration = meta.duration
+            this.lyrics = emptyList()
+        }
+        val ok = runCatching { p.player.setSong(song) }.getOrDefault(false)
+        logger.info("切歌占位：$id ${meta.name}, ok=$ok")
+    }
+
+    /**
+     * 判断 songLyric.json 是否属于当前歌曲。该文件只保存最近一首，
+     * 切歌瞬间可能还是上一首的内容，因此满足任一条才认：
+     *  - 首行是「歌名 - 歌手」（MeloYou 会给第一行写歌名）且包含当前歌名核心词；
+     *  - nowPlaying.json 里的歌名与当前一致；
+     *  - 文件是在本次切歌之后写入的（拿到新歌词时它会立刻重写这个文件）。
+     */
+    private fun belongsToCurrentSong(lines: List<RichLyricLine>): Boolean {
+        val want = currentMeta?.name ?: return true
+        val wantKey = coreTitle(want)
+        if (wantKey.isEmpty()) return true
+        val head = normalize(lines.firstOrNull()?.text)
+        if (head.contains(wantKey)) return true
+        val fileTitle = normalize(currentFileSongName())
+        if (fileTitle.isNotEmpty() && fileTitle.contains(wantKey)) return true
+        return System.currentTimeMillis() - lastSongSwitchWall <= FILE_FRESH_WINDOW_MS
+    }
+
+    /** 歌名核心词：去掉《》与括号说明、后半段副标题 */
+    private fun coreTitle(raw: String): String {
+        var text = raw
+        val cut = text.indexOfFirst {
+            it == '-' || it == '–' || it == '_' || it == '《' ||
+                it == '(' || it == '（' || it == '[' || it == '【'
+        }
+        if (cut > 1) text = text.substring(0, cut)
+        return normalize(text)
+    }
+
+    /** nowPlaying.json 里 MeloYou 自己写的歌名 */
+    private fun currentFileSongName(): String? {
+        val context = application ?: return null
+        return runCatching {
+            readAppFile(context, Constants.NOW_PLAYING_FILE)
+                ?.let { JSONObject(it).optString("name") }
+                ?.takeIf { it.isNotBlank() && it != "null" }
+        }.getOrNull()
+    }
 
     private fun publishIfReady() {
         val p = provider ?: return
@@ -587,7 +705,10 @@ internal class XingHeLyricProvider(
 
     companion object {
         /** 进度推送间隔：足够密以保持歌词跟手，又不至于过度 IPC（毫秒） */
-        private const val TICK_INTERVAL_MS = 400L
+        private const val TICK_INTERVAL_MS = 48L
+
+        /** songLyric.json 在切歌后这段时间内被写入就认作当前歌曲 */
+        private const val FILE_FRESH_WINDOW_MS = 6000L
 
         /** 锚点回跳容忍：≤2s 视为正常抖动/小幅 seek */
         private const val BACKWARD_TOLERANCE_MS = 2000L

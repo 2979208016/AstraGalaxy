@@ -73,6 +73,37 @@ internal class LocalLyricProvider(
     @Volatile
     private var pendingLyric: Triple<LocalLyric, String, Long>? = null
 
+
+    /** 上一次切歌时刻（用于判断嗅到的歌词是否属于当前歌曲） */
+    @Volatile
+    private var songSwitchAt: Long = 0L
+
+    // ---------------- 进度锚点：自行推算，高频写入共享内存 ----------------
+
+    @Volatile
+    private var anchorPosition: Long = 0L
+
+    @Volatile
+    private var anchorRealtime: Long = 0L
+
+    @Volatile
+    private var anchorPlaying: Boolean = false
+
+    @Volatile
+    private var playbackSpeed: Float = 1.0f
+
+    @Volatile
+    private var hasAnchor: Boolean = false
+
+    /** 上一次同步给星流的播放状态，避免重复 IPC */
+    private var lastPushedPlaying: Boolean? = null
+
+    private val progressTicker = object : Runnable {
+        override fun run() {
+            tickProgress()
+            mainHandler.postDelayed(this, TICK_INTERVAL_MS)
+        }
+    }
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val lookupExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -174,20 +205,51 @@ internal class LocalLyricProvider(
     }
 
     private fun onNetworkLyric(lyric: LocalLyric, source: String) {
-        pendingLyric = Triple(lyric, source, SystemClock.elapsedRealtime())
+        val sniffedAt = SystemClock.elapsedRealtime()
+        pendingLyric = Triple(lyric, source, sniffedAt)
         val signature = currentSignature ?: return
         if (lyricFound) return
         val parts = signature.split('|')
         val title = parts.getOrNull(0).orEmpty()
         if (title.isBlank()) return
         val artist = parts.getOrNull(1)?.takeIf { it.isNotBlank() && it != "null" }
-        val duration = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-        val mediaId = parts.getOrNull(3)?.takeIf { it.isNotBlank() && it != "null" }
+        val duration = metadataDurationMs
+        val mediaId = parts.getOrNull(2)?.takeIf { it.isNotBlank() && it != "null" }
+            ?: currentMediaId
         logger.info("[$source] 嗅到歌词：${lyric.lines.size} 行，标题=<${lyric.title ?: lyric.firstLine}>")
+        if (!belongsToCurrentSong(lyric, sniffedAt, title, artist)) {
+            logger.info("[$source] 丢弃非当前歌曲的歌词（当前=$title - $artist）")
+            return
+        }
         mainHandler.post {
             if (currentSignature != signature || lyricFound) return@post
             publish(title, artist, duration, mediaId, lyric.lines, source)
         }
+    }
+
+    /**
+     * 判断嗅到的歌词是否属于当前歌曲，避免把上一首/下一首的歌词推成当前歌曲：
+     *  - 歌词自带标题或歌手时，必须与当前歌曲对得上；
+     *  - 没有标题信息时，只接受本次切歌之后才嗅到的内容。
+     */
+    private fun belongsToCurrentSong(
+        lyric: LocalLyric,
+        sniffedAt: Long,
+        title: String,
+        artist: String?
+    ): Boolean {
+        val want = LocalLyricFinder.normalize(title)
+        val sniffed = LocalLyricFinder.normalize(lyric.title)
+        val sniffedArtist = LocalLyricFinder.normalize(lyric.artist)
+        if (sniffed.isNotEmpty()) {
+            if (sniffed == want || sniffed.contains(want) || want.contains(sniffed)) return true
+            val wantArtist = LocalLyricFinder.normalize(artist)
+            if (wantArtist.isNotEmpty() && sniffedArtist.isNotEmpty() &&
+                (sniffedArtist.contains(wantArtist) || wantArtist.contains(sniffedArtist))
+            ) return true
+            return false
+        }
+        return sniffedAt >= songSwitchAt
     }
 
     // ---------------- MediaSession ----------------
@@ -227,7 +289,9 @@ internal class LocalLyricProvider(
 
         if (duration > 0) metadataDurationMs = duration
 
-        val signature = "$title|$artist|$duration|$mediaId"
+        // 签名不含时长：波点这类播放器同一首歌会重复上报 metadata，
+        // 只有时长/音质不同不该被当成新歌，否则歌词会被反复清空重查。
+        val signature = "$title|$artist|$mediaId"
         synchronized(stateLock) {
             if (signature == currentSignature) return
             currentSignature = signature
@@ -237,6 +301,14 @@ internal class LocalLyricProvider(
         lyricFound = false
         fallbackSent = false
         attemptIndex.set(0)
+        pendingLyric = null
+        songSwitchAt = SystemClock.elapsedRealtime()
+
+        // 切歌：进度归零，重新起锚
+        anchorPosition = 0L
+        anchorRealtime = SystemClock.elapsedRealtime()
+        hasAnchor = true
+        lastPushedPlaying = null
 
         val registered = ensureProvider()
         if (registered == null) {
@@ -246,7 +318,11 @@ internal class LocalLyricProvider(
         runCatching { registered.player.setPosition(0L) }
 
         logger.info("Metadata changed: $title - $artist ($duration) id=$mediaId in $processName")
+        // 先推「只有歌曲信息、没有歌词」的快照，立刻清掉上一首的歌词，
+        // 拿到真歌词后再覆盖（星流接受同一 id 的后续更新）。
+        publishPlaceholder(title, artist, duration, mediaId)
         publishPending(title, artist, duration, mediaId)
+        startProgressTicker()
         mainHandler.removeCallbacks(retryTask)
         mainHandler.post(retryTask)
     }
@@ -254,8 +330,53 @@ internal class LocalLyricProvider(
     private fun onPlaybackStateChanged(state: PlaybackState?) {
         state ?: return
         val registered = ensureProvider() ?: return
-        // 直接转发框架的播放状态对象，让远端自己推算进度（与参考实现一致）
+
+        val position = state.position
+        val playing = state.state == PlaybackState.STATE_PLAYING
+        val speed = state.playbackSpeed.takeIf { it > 0f } ?: 1.0f
+
+        if (position >= 0L) {
+            anchorPosition = position
+            anchorRealtime = SystemClock.elapsedRealtime()
+            hasAnchor = true
+        }
+        anchorPlaying = playing
+        playbackSpeed = speed
+
         runCatching { registered.player.setPlaybackState(state) }
+        runCatching { registered.player.setPosition(extrapolatedPosition()) }
+        lastPushedPlaying = playing
+        startProgressTicker()
+    }
+
+    /**
+     * 星流每帧从共享内存读进度，只在播放器发 setPlaybackState 时同步一次会「卡住」，
+     * 因此这里按固定间隔自行推算并写入。
+     */
+    private fun startProgressTicker() {
+        mainHandler.removeCallbacks(progressTicker)
+        mainHandler.post(progressTicker)
+    }
+
+    private fun extrapolatedPosition(): Long {
+        if (!hasAnchor) return 0L
+        if (!anchorPlaying) return anchorPosition
+        val elapsed = SystemClock.elapsedRealtime() - anchorRealtime
+        val pos = anchorPosition + (elapsed.toDouble() * playbackSpeed.toDouble()).toLong()
+        val duration = metadataDurationMs
+        return if (duration > 0) pos.coerceIn(0L, duration) else pos.coerceAtLeast(0L)
+    }
+
+    private fun tickProgress() {
+        val registered = provider ?: return
+        if (!hasAnchor) return
+        runCatching {
+            if (lastPushedPlaying != anchorPlaying) {
+                registered.player.setPlaybackState(anchorPlaying)
+                lastPushedPlaying = anchorPlaying
+            }
+            registered.player.setPosition(extrapolatedPosition())
+        }
     }
 
     // ---------------- 歌词查找（本地缓存 + 退避重试） ----------------
@@ -266,8 +387,9 @@ internal class LocalLyricProvider(
         val parts = signature.split('|')
         val title = parts.getOrNull(0).orEmpty()
         val artist = parts.getOrNull(1)?.takeIf { it.isNotBlank() && it != "null" }
-        val duration = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-        val mediaId = parts.getOrNull(3)?.takeIf { it.isNotBlank() && it != "null" }
+        val duration = metadataDurationMs
+        val mediaId = parts.getOrNull(2)?.takeIf { it.isNotBlank() && it != "null" }
+            ?: currentMediaId
         if (title.isBlank()) return
 
         val index = attemptIndex.getAndIncrement()
@@ -364,6 +486,7 @@ internal class LocalLyricProvider(
 
     /** 两条通道都没歌词时的兜底：只推歌曲信息，至少让星流有东西可显示 */
     /** 歌词先到、歌曲信息后到：把缓存的那份拿出来用 */
+    /** 歌词先到、歌曲信息后到：把缓存的那份拿出来用 */
     private fun publishPending(title: String, artist: String?, durationMs: Long, mediaId: String?) {
         val cached = pendingLyric ?: return
         val (lyric, source, at) = cached
@@ -372,13 +495,23 @@ internal class LocalLyricProvider(
             pendingLyric = null
             return
         }
-        val sniffed = lyric.title?.let { LocalLyricFinder.normalize(it) }.orEmpty()
-        val want = LocalLyricFinder.normalize(title)
-        val matched = sniffed.isNotEmpty() &&
-            (sniffed == want || sniffed.contains(want) || want.contains(sniffed))
-        if (!matched && age > PENDING_QUICK_MS) return
-        logger.info("[$source] 使用缓存歌词（${age}ms 前嗅到，匹配=$matched）")
+        if (!belongsToCurrentSong(lyric, at, title, artist)) return
+        logger.info("[$source] 使用缓存歌词（${age}ms 前嗅到）")
         publish(title, artist, durationMs, mediaId, lyric.lines, source)
+    }
+
+    /** 切歌时先推「只有歌曲信息、没有歌词」的快照，清掉上一首的歌词 */
+    private fun publishPlaceholder(title: String, artist: String?, durationMs: Long, mediaId: String?) {
+        val registered = ensureProvider() ?: return
+        val song = Song().apply {
+            id = mediaId ?: title
+            name = title
+            this.artist = artist
+            this.duration = durationMs
+            this.lyrics = emptyList()
+        }
+        val ok = runCatching { registered.player.setSong(song) }.getOrDefault(false)
+        logger.info("切歌占位：推送歌曲信息 $title - $artist, ok=$ok")
     }
 
     private fun publishFallback(title: String, artist: String?, durationMs: Long, mediaId: String?) {
@@ -402,7 +535,10 @@ internal class LocalLyricProvider(
      */
     private fun sanitize(raw: List<RichLyricLine>): List<RichLyricLine> {
         val cleaned = raw
-            .filter { !it.text.isNullOrBlank() && it.begin >= 0 }
+            .filter {
+                !it.text.isNullOrBlank() && it.begin >= 0 &&
+                    !LyricParsers.looksLikeNoise(it.text.orEmpty())
+            }
             .sortedBy { it.begin }
         if (cleaned.isEmpty()) return emptyList()
 
@@ -459,9 +595,12 @@ internal class LocalLyricProvider(
     }
 
     companion object {
-        /** 缓存歌词的有效期与「快速窗口」 */
-        private const val PENDING_TTL_MS = 90_000L
-        private const val PENDING_QUICK_MS = 15_000L
+        /** 缓存歌词有效期（仅用于「歌词先到、歌曲信息后到」的场景） */
+        private const val PENDING_TTL_MS = 30_000L
+
+        /** 进度写入间隔：星流按帧读共享内存，41ms 是它期望的默认节奏 */
+        private const val TICK_INTERVAL_MS = 48L
+
         /**
          * 重试节奏（毫秒，每项是「这一次查完后再等多久」）。
          * 总窗口约 2 分钟，足够覆盖播放器拉取歌词并落盘的过程。
