@@ -29,5 +29,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "XingHe"
+rootProject.name = "AstraGalaxy"
 include(":app")

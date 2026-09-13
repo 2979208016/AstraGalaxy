@@ -28,7 +28,7 @@ internal class LocalLyric(
     val firstLine: String? = null
 )
 
-internal enum class LyricFormat { KRC, QRC, LRC, NETEASE }
+internal enum class LyricFormat { KRC, QRC, LRC, NETEASE, LRCX }
 
 internal enum class BaseDir { EXTERNAL_FILES, EXTERNAL_CACHE, FILES, CACHE }
 
@@ -65,6 +65,8 @@ internal object LyricParsers {
         "content", "lyrics", "text", "tlyric"
     )
     private val META_LINE = Regex("""^\[([A-Za-z]+)\s*:\s*(.*?)]$""")
+    private val KUWO_LINE = Regex("""^\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]""")
+    private val KUWO_TAG = Regex("""<(-?\d+),(-?\d+)>""")
     private val LRC_TIME = Regex("""\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?]""")
     private val LRC_WORD_TAG = Regex("""<\s*-?\d+\s*,\s*-?\d+\s*>""")
     private val ANY_TAG = Regex("""<[^>]*>""")
@@ -176,7 +178,7 @@ internal object LyricParsers {
             val from = tags[i].range.last + 1
             val to = if (i + 1 < tags.size) tags[i + 1].range.first else body.length
             if (from >= to) continue
-            val line = parseWords(start, dur, body.substring(from, to).replace(ANY_TAG, ""), QRC_WORD) ?: continue
+            val line = parseQrcWords(start, dur, body.substring(from, to)) ?: continue
             val text = line.text.orEmpty().trim()
             if (text.isEmpty() || isPlaceholder(text)) continue
             if (firstLine == null) firstLine = text
@@ -341,17 +343,19 @@ internal object LyricParsers {
      */
     fun parseAnyPayload(text: String): LocalLyric? {
         // 汽水音乐的歌词 JSON（{"lyric":{"type":"krc","content":…}}）
-        LunaLyric.parsePayload(trimmedText(text))?.let { if (it.lines.size >= 3) return it }
+        LunaLyric.parsePayload(trimmedText(text))?.let { if (isUsable(it.lines)) return it }
+        // 酷我 LRCX
+        parseKuwoLrcx(text)?.let { if (isUsable(it.lines)) return it }
         val trimmed = text.trim()
         if (trimmed.length < 32 || trimmed.length > 4_000_000) return null
 
         if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
             val obj = runCatching { JSONObject(trimmed) }.getOrNull()
             if (obj != null) {
-                parseNetease(trimmed)?.let { if (it.lines.size >= 3) return it }
+                parseNetease(trimmed)?.let { if (isUsable(it.lines)) return it }
                 for (key in LYRICS_KEYS) {
                     val value = obj.optString(key).takeIf { it.isNotBlank() } ?: continue
-                    parseAnyPayload(value)?.let { if (it.lines.size >= 3) return it }
+                    parseAnyPayload(value)?.let { if (isUsable(it.lines)) return it }
                 }
                 for (key in obj.keys()) {
                     val nested = obj.opt(key) ?: continue
@@ -364,7 +368,7 @@ internal object LyricParsers {
                         }
                         else -> null
                     } ?: continue
-                    parseAnyPayload(value)?.let { if (it.lines.size >= 3) return it }
+                    parseAnyPayload(value)?.let { if (isUsable(it.lines)) return it }
                 }
             } else {
                 runCatching { JSONArray(trimmed) }.getOrNull()?.let { array ->
@@ -374,37 +378,96 @@ internal object LyricParsers {
                             is JSONObject -> element.toString()
                             else -> null
                         } ?: continue
-                        parseAnyPayload(value)?.let { if (it.lines.size >= 3) return it }
+                        parseAnyPayload(value)?.let { if (isUsable(it.lines)) return it }
                     }
                 }
             }
         }
 
         if (trimmed.contains("LyricContent")) {
-            parseQrcText(trimmed).let { if (it.lines.size >= 3) return it }
+            parseQrcText(trimmed).let { if (isUsable(it.lines)) return it }
         }
         if (YRC_WORD.containsMatchIn(trimmed)) {
             val lines = parseNeteaseYrc(trimmed)
-            if (lines.size >= 3) return LocalLyric(lines, null, null, null, lines.firstOrNull()?.text)
+            if (isUsable(lines)) return LocalLyric(lines, null, null, null, lines.firstOrNull()?.text)
         }
         if (QRC_LINE.containsMatchIn(trimmed)) {
-            parseQrcText(trimmed).let { if (it.lines.size >= 3) return it }
+            parseQrcText(trimmed).let { if (isUsable(it.lines)) return it }
         }
-        parseLrcText(trimmed).let { if (it.lines.size >= 3) return it }
+        parseLrcText(trimmed).let { if (isUsable(it.lines)) return it }
 
         // 有些平台把歌词塞在 JSON 字符串里，换行是转义的
         val unescaped = trimmed.replace("\\n", "\n").replace("\\/", "/")
         if (unescaped != trimmed) {
-            parseLrcText(unescaped).let { if (it.lines.size >= 3) return it }
+            parseLrcText(unescaped).let { if (isUsable(it.lines)) return it }
         }
         return null
+    }
+
+    /**
+     * 酷我 LRCX：`[00:19.706]<772,-772>就<2216,872>当<…>作…`
+     * 尖括号里是 `<结束,开始>`（相对本行起点，毫秒）。
+     */
+    fun parseKuwoLrcx(content: String): LocalLyric? {
+        if (!content.contains("[kuwo")) return null
+        var title: String? = null
+        var artist: String? = null
+        val lines = ArrayList<RichLyricLine>()
+        for (raw in content.lineSequence()) {
+            val line = raw.trim()
+            if (line.isEmpty()) continue
+            when {
+                line.startsWith("[ti:") -> title = line.removePrefix("[ti:").trimEnd(']').trim().ifBlank { null }
+                line.startsWith("[ar:") -> artist = line.removePrefix("[ar:").trimEnd(']').trim().ifBlank { null }
+                line.startsWith("[kuwo:") || line.startsWith("[ver:") || line.startsWith("[al:") ||
+                    line.startsWith("[by:") || line.startsWith("[offset:") || line.startsWith("[length:")
+                -> continue
+            }
+            val match = KUWO_LINE.find(line) ?: continue
+            val lineBegin = toMs(match)
+            val body = line.substring(match.range.last + 1)
+            val words = ArrayList<LyricWord>()
+            val text = StringBuilder()
+            var index = 0
+            for (tag in KUWO_TAG.findAll(body)) {
+                val chunk = body.substring(index, tag.range.first)
+                index = tag.range.last + 1
+                text.append(chunk)
+                if (!isMeaningful(chunk)) continue
+                val start = lineBegin + (tag.groupValues[2].toLongOrNull() ?: 0L).coerceAtLeast(0L)
+                val end = lineBegin + (tag.groupValues[1].toLongOrNull() ?: 0L).coerceAtLeast(0L)
+                words.add(
+                    LyricWord(
+                        begin = start,
+                        end = end.coerceAtLeast(start + 1),
+                        duration = (end - start).coerceAtLeast(1),
+                        text = chunk
+                    )
+                )
+            }
+            val tail = body.substring(index)
+            text.append(tail)
+            val plain = text.toString().trim()
+            if (!isMeaningful(plain)) continue
+            lines.add(
+                RichLyricLine(begin = lineBegin, end = lineBegin, text = plain, words = words.ifEmpty { null })
+            )
+        }
+        if (lines.size < 3) return null
+        val sorted = lines.sortedBy { it.begin }
+        sorted.forEachIndexed { i, line ->
+            val end = (sorted.getOrNull(i + 1)?.begin ?: (line.begin + 4000L)).coerceAtLeast(line.begin)
+            line.end = end
+            line.duration = end - line.begin
+        }
+        return LocalLyric(sorted, null, null, null, title ?: artist ?: sorted.firstOrNull()?.text)
     }
 
     private fun trimmedText(text: String): String = text.trim()
     /** 嗅探到的二进制（KRC 等） */
     /** 嗅探到的二进制（KRC 等） */
     fun parseAnyBytes(bytes: ByteArray): LocalLyric? {
-        parseKrc(bytes)?.let { if (it.lines.isNotEmpty()) return it }
+        parseKrc(bytes)?.let { if (isUsable(it.lines)) return it }
         val text = runCatching { bytes.toString(Charsets.UTF_8) }.getOrNull() ?: return null
         if (text.count { it == '\u0000' } > 4) return null
         return parseAnyPayload(text)
@@ -413,9 +476,25 @@ internal object LyricParsers {
     // ---------------- 工具 ----------------
 
     /** 明显不是歌词的内容（JSON/代码/标签残留），用于拦截 {"re":…} 这类脏数据 */
+    /** 词 / 行里至少要有一个文字或数字，纯标点一律丢弃 */
+    private fun isMeaningful(text: String): Boolean = text.any { it.isLetterOrDigit() }
+
+    /**
+     * 解析结果是否可用：至少 3 行，且一半以上的行有实际文字。
+     * 网络旁路拿到过整份「,」这种脏数据，一律不接受。
+     */
+    fun isUsable(lines: List<RichLyricLine>): Boolean {
+        if (lines.size < 3) return false
+        val good = lines.count { line -> line.text?.any { it.isLetterOrDigit() } == true }
+        return good >= 3 && good * 2 >= lines.size
+    }
+
     fun looksLikeNoise(text: String): Boolean {
         val t = text.trim()
         if (t.isEmpty()) return true
+        // 纯标点/纯符号（含全角逗号、省略号）不是歌词。
+        // 酷我等播放器的网络歌词里混进过整份「,」行，必须在这里挡死。
+        if (!t.any { it.isLetterOrDigit() }) return true
         if (t.startsWith("{") || t.startsWith("}") || t.startsWith("[") ||
             t.startsWith("]") || (t.startsWith("<") && t.endsWith(">"))
         ) return true
@@ -462,6 +541,53 @@ internal object LyricParsers {
         return null
     }
 
+    /**
+     * QQ 音乐 QRC 逐字行解析（只给 QRC 用，不动 KRC / YRC）：
+     * **文本在时间前面**，而且括号里的时间是**绝对**毫秒。
+     *
+     * 真机缓存实测两首：
+     *   [383,5058]窗(383,1038)外(1421,779) - (2200,779)李(2979,1181)琛(4160,1281)
+     *   [4180,4180]词(4180,836)：(5016,836)李(5852,836)勤(6688,836)
+     * 原来的 parseWords 取「标签后面的文本」，于是每行的第一个字被丢掉
+     * （用户反馈的「QQ 音乐歌词第 1 个字会消失」），而且把绝对时间又加了一次行起点。
+     */
+    private fun parseQrcWords(lineBegin: Long, lineDur: Long, body: String): RichLyricLine? {
+        val tags = QRC_WORD.findAll(body).toList()
+        if (tags.isEmpty()) {
+            val t = body.replace(ANY_TAG, "").trim()
+            if (t.isEmpty()) return null
+            return RichLyricLine(begin = lineBegin, end = lineBegin + lineDur.coerceAtLeast(0L), text = t)
+        }
+        val words = ArrayList<LyricWord>()
+        val sb = StringBuilder()
+        var prev = 0
+        for (m in tags) {
+            if (m.range.first < prev) continue
+            val chunk = body.substring(prev, m.range.first).replace(ANY_TAG, "")
+            prev = m.range.last + 1
+            sb.append(chunk)
+            if (!isMeaningful(chunk)) continue
+            val begin = (m.groupValues[1].toLongOrNull() ?: lineBegin).coerceAtLeast(0L)
+            val dur = (m.groupValues[2].toLongOrNull() ?: 0L).coerceAtLeast(1L)
+            words.add(LyricWord(begin = begin, end = begin + dur, duration = dur, text = chunk))
+        }
+        val tail = body.substring(prev).replace(ANY_TAG, "")
+        sb.append(tail)
+        if (isMeaningful(tail)) {
+            val begin = words.lastOrNull()?.end ?: lineBegin
+            val end = (lineBegin + lineDur).coerceAtLeast(begin + 1)
+            words.add(LyricWord(begin = begin, end = end, duration = end - begin, text = tail))
+        }
+        val text = sb.toString().trim()
+        if (!isMeaningful(text)) return null
+        val end = if (lineDur > 0) {
+            (lineBegin + lineDur).coerceAtLeast(lineBegin)
+        } else {
+            (words.lastOrNull()?.end ?: (lineBegin + 3000L)).coerceAtLeast(lineBegin)
+        }
+        return RichLyricLine(begin = lineBegin, end = end, text = text, words = words.ifEmpty { null })
+    }
+
     private fun parseWords(lineBegin: Long, lineDur: Long, body: String, tag: Regex): RichLyricLine? {
         val tags = tag.findAll(body).toList()
         if (tags.isEmpty()) {
@@ -477,7 +603,7 @@ internal object LyricParsers {
         for (m in tags) {
             if (prevEnd >= 0) {
                 val text = body.substring(prevEnd, m.range.first)
-                if (text.isNotEmpty()) {
+                if (isMeaningful(text)) {
                     val b = lineBegin + offset
                     words.add(LyricWord(begin = b, end = b + duration, duration = duration, text = text))
                     sb.append(text)
@@ -489,14 +615,14 @@ internal object LyricParsers {
         }
         if (prevEnd in 0..body.length) {
             val text = body.substring(prevEnd)
-            if (text.isNotEmpty()) {
+            if (isMeaningful(text)) {
                 val b = lineBegin + offset
                 words.add(LyricWord(begin = b, end = b + duration, duration = duration, text = text))
                 sb.append(text)
             }
         }
         val t = sb.toString().trim()
-        if (t.isEmpty()) return null
+        if (!isMeaningful(t)) return null
         val end = if (lineDur > 0) lineBegin + lineDur else (words.lastOrNull()?.end ?: (lineBegin + 3000L))
         return RichLyricLine(begin = lineBegin, end = end.coerceAtLeast(lineBegin), text = t, words = words)
     }
@@ -551,7 +677,20 @@ internal object LocalLyricFinder {
     /** 兜底：按总时长匹配的容差 */
     private const val DURATION_TOLERANCE_MS = 8_000L
 
+    /** 兜底：缓存「刚写入」窗口（文件名不含歌名/id 的平台，如 QQ 音乐） */
+    private const val FRESH_WRITE_MS = 15_000L
+
+    /** 兜底：允许缓存比本首歌开始时间早多久（写入耗时） */
+    private const val WRITE_GRACE_MS = 2_000L
+
     private val HASH_SUFFIX = Regex("""-[0-9a-fA-F]{16,}$|-(\d{5,})$""")
+
+    /** 私有目录扫描的深度与规模上限 */
+    private const val MAX_SWEEP_DEPTH = 4
+    private const val MAX_SWEEP_FILES = 400
+    private const val MAX_SWEEP_FILE_BYTES = 2L * 1024 * 1024
+
+    private val NAME_IN_JSON = Regex(""""Name"\s*:\s*"([^"]+)"""")
 
     /** path -> (mtime, 解析结果)，避免重复解析 */
     private val cache = ConcurrentHashMap<String, Entry>()
@@ -565,19 +704,23 @@ internal object LocalLyricFinder {
         artist: String?,
         durationMs: Long,
         mediaId: String?,
+        songStartedAtMs: Long = 0L,
         log: (String) -> Unit
-    ): List<RichLyricLine>? {
+    ): LocalLyric? {
         val wantTitle = normalize(title)
+        val wantCore = titleCore(title)
         val wantArtist = normalize(artist)
         val now = System.currentTimeMillis()
 
         // 索引快速通道：之前扫过并记下的「歌曲 id / 歌名 / 歌手 → 文件」直接命中
-        indexLookup(context, recipe, mediaId, durationMs, wantTitle, wantArtist, now, log)
+        indexLookup(context, recipe, mediaId, durationMs, wantTitle, wantCore, wantArtist, now, log)
             ?.let { return it }
 
         var bestScore = Int.MIN_VALUE
         var bestLyric: LocalLyric? = null
+        var bestFile: File? = null
         var newest: Pair<File, LocalLyric>? = null
+        val parsed = ArrayList<Pair<File, LocalLyric>>()
 
         for (src in recipe.sources) {
             val dir = resolveDir(context, src) ?: continue
@@ -594,46 +737,225 @@ internal object LocalLyricFinder {
                 if (newest == null || file.lastModified() > newest!!.first.lastModified()) {
                     newest = file to lyric
                 }
-                val score = scoreOf(file, lyric, wantTitle, wantArtist, mediaId, durationMs, now)
+                parsed += file to lyric
+                var score = scoreOf(file, lyric, wantTitle, wantCore, wantArtist, mediaId, durationMs, now)
+                if (src.format == LyricFormat.QRC) {
+                    // qrc 文件名是 md5、正文加密，唯一的身份证据是旁边的 <同名>.producer
+                    when (producerEvidence(file, wantArtist)) {
+                        true -> {
+                            score += 150
+                            log(file.name + " 演唱名单吻合")
+                        }
+                        false -> score -= 500
+                        null -> Unit
+                    }
+                }
                 if (score > bestScore) {
                     bestScore = score
                     bestLyric = lyric
+                    bestFile = file
                 }
             }
             log("扫描 ${dir.absolutePath}: 共 ${files.size} 个文件, 解析 ${candidates.size} 个")
         }
 
         if (bestLyric != null && bestScore >= ACCEPT_SCORE) {
-            log("匹配成功 score=$bestScore")
-            return bestLyric.lines
+            log("匹配成功 score=$bestScore: " + (bestFile?.name ?: ""))
+            return bestLyric
         }
 
-        // 兜底 1：正文完全没有歌名，且文件刚写入（OPPO/网易云这类无元数据缓存）
+        // 兜底：只认领「能证明属于本首歌」的缓存。
+        //  · 文件名就是歌曲 id 的平台（网易云 / OPPO）：必须写在本首歌开始之后，
+        //    否则上一首刚落盘的文件会被认成这一首，这正是「词不对歌」的来源；
+        //  · QQ 音乐的 qrc 用 md5 命名、正文既没有歌名也没有 id，只能靠总时长吻合，
+        //    这是它唯一能出词的路径，不能像之前那样一刀切掉。
+        val opaqueName = recipe.sources.any { it.format == LyricFormat.QRC }
+        // 网易云这类「缓存文件名就是歌曲 id」的平台，认领规则更硬
+        val idNamed = recipe.sources.any { it.format == LyricFormat.NETEASE }
+        val startedAt = songStartedAtMs
+        val freshWindow = if (opaqueName) RECENT_WINDOW_MS else FRESH_WRITE_MS
+        val mid = normalize(mediaId)
+
+        // 1) 总时长吻合。QQ 音乐（qrc）还要有「身份证据」才认：
+        //    · 旁边的 .producer 里写着当前歌手 → 认；
+        //    · 文件是本次播放期间新写入的 → 认；
+        //    · 否则一律不认 —— 之前只按时长猜，把别的歌的歌词推了出去
+        //      （用户反馈的「QQ 音乐歌词完全对不上歌曲」）。
+        var verified: Pair<File, LocalLyric>? = null
+        var verifiedDiff = Long.MAX_VALUE
+        var fresh: Pair<File, LocalLyric>? = null
+        var freshDiff = Long.MAX_VALUE
+        if (durationMs > 0L) {
+            for ((file, lyric) in parsed) {
+                val last = lyric.lines.lastOrNull()?.begin ?: continue
+                val diff = abs(last - durationMs)
+                if (diff > DURATION_TOLERANCE_MS) continue
+                if (identityConflicts(lyric, wantCore, wantArtist, mid)) {
+                    log("排除 " + file.name + "：歌词自带身份与当前歌曲不符")
+                    continue
+                }
+                val evidence = if (opaqueName) producerEvidence(file, wantArtist) else null
+                if (evidence == false) {
+                    log("排除 " + file.name + "：演唱名单与当前歌手不符")
+                    continue
+                }
+                val recentlyWritten = startedAt > 0L &&
+                    file.lastModified() >= startedAt - WRITE_GRACE_MS
+                // 文件名就是本曲 id（网易云的 LrcCache）：最硬的证据
+                val namedById = mid.isNotEmpty() &&
+                    normalize(file.name.substringBeforeLast('.')) == mid
+                if (evidence == true) {
+                    if (diff < verifiedDiff) {
+                        verifiedDiff = diff
+                        verified = file to lyric
+                    }
+                } else if (namedById || (recentlyWritten && !idNamed)) {
+                    if (diff < freshDiff) {
+                        freshDiff = diff
+                        fresh = file to lyric
+                    }
+                }
+            }
+        }
+        val durationCandidate = verified ?: fresh
+        if (durationCandidate != null) {
+            val how = if (verified != null) "名单吻合" else "新写入"
+            log("兜底命中(时长吻合·" + how + "): " + durationCandidate.first.name)
+            return durationCandidate.second
+        }
+
+        // 2) 刚写入的缓存
         val recent = newest
-        if (recent != null && recent.second.title.isNullOrBlank() &&
-            now - recent.first.lastModified() <= RECENT_WINDOW_MS
-        ) {
-            log("兜底命中(最近写入): ${recent.first.name}")
-            return recent.second.lines
-        }
-
-        // 兜底 2：正文无歌名但总时长吻合
-        if (recent != null && recent.second.title.isNullOrBlank() && durationMs > 0) {
-            val last = recent.second.lines.last().begin
-            if (abs(last - durationMs) <= DURATION_TOLERANCE_MS) {
-                log("兜底命中(时长吻合): ${recent.first.name}")
-                return recent.second.lines
+        if (recent != null) {
+            val writtenAt = recent.first.lastModified()
+            val age = now - writtenAt
+            val inSong = startedAt > 0L && writtenAt >= startedAt - WRITE_GRACE_MS
+            val evidence = if (opaqueName) producerEvidence(recent.first, wantArtist) else null
+            if (age <= freshWindow && (opaqueName || inSong) && evidence != false) {
+                log("兜底命中(最近写入): " + recent.first.name)
+                return recent.second
             }
         }
 
         log("未匹配 (最佳分=$bestScore)")
+        // 失败时把前几名候选打出来，方便定位「为什么没认出来」
+        runCatching {
+            parsed.map { (file, lyric) ->
+                scoreOf(file, lyric, wantTitle, wantCore, wantArtist, mediaId, durationMs, now) to file.name
+            }.sortedByDescending { it.first }
+                .take(3)
+                .joinToString(" | ") { it.second + "=" + it.first }
+        }.getOrNull()?.let { log("候选: $it") }
         return null
+    }
+    /**
+     * 兜底通道：直接扫宿主自己的私有目录（files / cache 及其外部对应目录，深度受限），
+     * 找长得像歌词的文件。
+     *
+     * 有些播放器（酷我）的歌词缓存既不在外部存储的固定位置、请求也不走 okhttp，
+     * 之前只推得出歌曲名和歌手。这里用同一套打分规则从它自己的目录里把歌词找出来。
+     */
+    fun findInOwnStorage(
+        context: Context,
+        title: String,
+        artist: String?,
+        durationMs: Long,
+        mediaId: String?,
+        songStartedAtMs: Long,
+        log: (String) -> Unit
+    ): LocalLyric? {
+        val wantTitle = normalize(title)
+        if (wantTitle.isEmpty()) return null
+        val wantArtist = normalize(artist)
+        val wantCore = titleCore(title)
+        val roots = listOfNotNull(
+            context.filesDir,
+            context.cacheDir,
+            runCatching { context.getExternalFilesDir(null) }.getOrNull(),
+            runCatching { context.getExternalCacheDir() }.getOrNull()
+        )
+        if (roots.isEmpty()) return null
+        val now = System.currentTimeMillis()
+        var bestScore = Int.MIN_VALUE
+        var best: LocalLyric? = null
+        var scanned = 0
+        for (root in roots) {
+            walkLyricFiles(root, 0) { file ->
+                if (scanned >= MAX_SWEEP_FILES) return@walkLyricFiles
+                val format = sweepFormatOf(file) ?: return@walkLyricFiles
+                if (file.length() > MAX_SWEEP_FILE_BYTES) return@walkLyricFiles
+                scanned++
+                val lyric = parse(context, file, format) ?: return@walkLyricFiles
+                if (lyric.lines.size < 3) return@walkLyricFiles
+                var score = scoreOf(file, lyric, wantTitle, wantCore, wantArtist, mediaId, durationMs, now)
+                if (format == LyricFormat.QRC) {
+                    when (producerEvidence(file, wantArtist)) {
+                        true -> score += 150
+                        false -> score -= 500
+                        null -> Unit
+                    }
+                }
+                if (score > bestScore) {
+                    bestScore = score
+                    best = lyric
+                }
+            }
+        }
+        log("私有目录扫描：" + scanned + " 个歌词文件，最佳分=" + bestScore)
+        return if (best != null && bestScore >= ACCEPT_SCORE) best else null
+    }
+
+    private fun walkLyricFiles(dir: File, depth: Int, visit: (File) -> Unit) {
+        if (depth > MAX_SWEEP_DEPTH) return
+        val children = runCatching { dir.listFiles() }.getOrNull() ?: return
+        for (child in children) {
+            if (child.isDirectory) walkLyricFiles(child, depth + 1, visit)
+            else if (child.isFile) visit(child)
+        }
+    }
+
+    private fun sweepFormatOf(file: File): LyricFormat? {
+        val name = file.name.lowercase()
+        return when {
+            name.endsWith(".krc") -> LyricFormat.KRC
+            name.endsWith(".qrc") -> LyricFormat.QRC
+            name.endsWith(".lrc") -> LyricFormat.LRC
+            name.endsWith(".lrcx") -> LyricFormat.LRCX
+            name.endsWith(".alm3ll") -> LyricFormat.LRC
+            else -> null
+        }
+    }
+
+    /**
+     * QQ 音乐的歌词目录里，每首歌词都配了一份 <同名>.producer（JSON，含演唱/作词等名字）。
+     * qrc 本身加密、文件名是 md5，正文里读不到歌名，只能靠它验明正身：
+     * 名单里没有当前歌手就排除，避免推出别的歌的歌词。
+     */
+    private fun producerEvidence(file: File, wantArtist: String): Boolean? {
+        val names = producerNames(file) ?: return null
+        if (wantArtist.isEmpty()) return null
+        for (name in names) {
+            val n = normalize(name)
+            if (n.isEmpty()) continue
+            if (n == wantArtist || n.contains(wantArtist) || wantArtist.contains(n)) return true
+        }
+        return false
+    }
+
+    private fun producerNames(file: File): List<String>? {
+        val parent = file.parentFile ?: return null
+        val base = file.name.substringBeforeLast('.', file.name)
+        val producer = File(parent, base + ".producer")
+        if (!producer.isFile || producer.length() <= 0L || producer.length() > 512 * 1024) return null
+        val text = runCatching { producer.readText() }.getOrNull() ?: return null
+        return NAME_IN_JSON.findAll(text).map { it.groupValues[1] }.toList()
     }
 
     private fun scoreOf(
         file: File,
         lyric: LocalLyric,
         wantTitle: String,
+        wantCore: String,
         wantArtist: String,
         mediaId: String?,
         durationMs: Long,
@@ -649,12 +971,18 @@ internal object LocalLyricFinder {
         val firstLine = normalize(lyric.firstLine)
         val embeddedId = normalize(lyric.id)
 
-        if (embeddedTitle.isNotEmpty()) {
+        val embeddedCore = titleCore(lyric.title)
+        if (embeddedCore.isNotEmpty() && wantCore.isNotEmpty()) {
+            if (embeddedCore == wantCore) score += 120
+            else if (embeddedCore.contains(wantCore) || wantCore.contains(embeddedCore)) score += 70
+        } else if (embeddedTitle.isNotEmpty()) {
             if (embeddedTitle == wantTitle) score += 120
             else if (embeddedTitle.contains(wantTitle) || wantTitle.contains(embeddedTitle)) score += 70
         }
-        if (fileBase.contains(wantTitle)) score += 60 else if (fileStem.contains(wantTitle)) score += 30
-        if (firstLine.contains(wantTitle)) score += 40
+        if (wantCore.isNotEmpty()) {
+            if (fileBase.contains(wantCore)) score += 60 else if (fileStem.contains(wantCore)) score += 30
+            if (firstLine.contains(wantCore)) score += 40
+        }
 
         if (wantArtist.length > 1) {
             if (embeddedArtist == wantArtist) score += 30
@@ -692,6 +1020,10 @@ internal object LocalLyricFinder {
                 LyricFormat.QRC -> LyricParsers.parseQrcFile(file.readBytes())
                 LyricFormat.LRC -> LyricParsers.parseLrcText(file.readText())
                 LyricFormat.NETEASE -> LyricParsers.parseNetease(file.readText())
+                LyricFormat.LRCX -> {
+                    val text = file.readText()
+                    LyricParsers.parseKuwoLrcx(text) ?: LyricParsers.parseLrcText(text)
+                }
             }
         }.getOrNull()
         if (cache.size > 600) cache.clear()
@@ -709,20 +1041,21 @@ internal object LocalLyricFinder {
         mediaId: String?,
         durationMs: Long,
         wantTitle: String,
+        wantCore: String,
         wantArtist: String,
         now: Long,
         log: (String) -> Unit
-    ): List<RichLyricLine>? {
+    ): LocalLyric? {
         val files = LyricIndex.lookup(context, wantTitle, wantArtist, mediaId)
         if (files.isEmpty()) return null
         for (file in files) {
             val format = formatOf(recipe, file) ?: continue
             val lyric = parse(context, file, format) ?: continue
             if (lyric.lines.isEmpty()) continue
-            val score = scoreOf(file, lyric, wantTitle, wantArtist, mediaId, durationMs, now)
+            val score = scoreOf(file, lyric, wantTitle, wantCore, wantArtist, mediaId, durationMs, now)
             if (score >= ACCEPT_SCORE) {
                 log("索引命中 score=$score: ${file.name}")
-                return lyric.lines
+                return lyric
             }
         }
         return null
@@ -737,7 +1070,7 @@ internal object LocalLyricFinder {
         return when {
             name.endsWith(".krc") -> LyricFormat.KRC
             name.endsWith(".qrc") -> LyricFormat.QRC
-            name.endsWith(".lrcx") -> LyricFormat.LRC
+            name.endsWith(".lrcx") -> LyricFormat.LRCX
             name.endsWith(".alm3ll") -> LyricFormat.LRC
             else -> recipe.sources.firstOrNull()?.format
         }
@@ -761,6 +1094,54 @@ internal object LocalLyricFinder {
 
     /** 去掉「歌名-hash」里的 hash 尾巴 */
     private fun stripHash(stem: String): String = HASH_SUFFIX.replace(stem, "")
+
+    /**
+     * 歌名核心词：先砍掉括号里的版本说明 / 副标题，再归一化。
+     * 「此生不换 (记忆是条长线)」→「此生不换」，「情网2026(DJ咚鼓版)」→「情网2026」。
+     */
+    fun titleCore(text: String?): String {
+        if (text.isNullOrBlank()) return ""
+        var cut = text.indexOfFirst {
+            it == '(' || it == '（' || it == '[' || it == '【' || it == '《' ||
+                it == '_' || it == '-' || it == '–' || it == '—'
+        }
+        if (cut < 0) cut = text.length
+        val head = if (cut > 1) text.substring(0, cut) else text
+        val core = normalize(head)
+        return if (core.isNotEmpty()) core else normalize(text)
+    }
+
+    /** 两个歌名是否指向同一首歌：核心词相等或互相包含 */
+    fun titlesMatch(a: String?, b: String?): Boolean {
+        val x = titleCore(a)
+        val y = titleCore(b)
+        if (x.isEmpty() || y.isEmpty()) return false
+        return x == y || x.contains(y) || y.contains(x)
+    }
+
+    /**
+     * 兜底认领前的身份校验：歌词自带的 id / 歌名 / 歌手只要与当前歌曲**明确冲突**就不认领。
+     * 「按总时长猜歌」最容易在这里翻车——实测酷狗把 3 分 23 秒的《怎叹》认成了
+     * 3 分 28 秒的《此生不换》，网易云把另一首歌的缓存认成了当前歌曲。
+     */
+    private fun identityConflicts(
+        lyric: LocalLyric,
+        wantCore: String,
+        wantArtist: String,
+        mediaId: String
+    ): Boolean {
+        val embeddedId = normalize(lyric.id)
+        if (embeddedId.isNotEmpty() && mediaId.isNotEmpty() && embeddedId != mediaId) return true
+        val embeddedCore = titleCore(lyric.title)
+        if (embeddedCore.isNotEmpty() && wantCore.isNotEmpty() &&
+            !(embeddedCore == wantCore || embeddedCore.contains(wantCore) || wantCore.contains(embeddedCore))
+        ) return true
+        val embeddedArtist = normalize(lyric.artist)
+        if (embeddedArtist.isNotEmpty() && wantArtist.isNotEmpty() &&
+            !(embeddedArtist.contains(wantArtist) || wantArtist.contains(embeddedArtist))
+        ) return true
+        return false
+    }
 
     /** 归一化：只保留字母/数字/中日韩文字，忽略大小写与符号 */
     fun normalize(text: String?): String {

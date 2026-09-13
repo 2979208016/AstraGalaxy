@@ -24,6 +24,19 @@ object Constants {
     /** 酷我音乐 */
     const val KUWO_PACKAGE: String = "cn.kuwo.player"
 
+    /** QQ 音乐：它的 ARTIST 字段是「歌名-歌手」结构（详见 PlayerTitle） */
+    const val QQ_PACKAGE: String = "com.tencent.qqmusic"
+
+    /**
+     * 会把「歌名-歌手」写进 ARTIST 字段的播放器（锁屏歌词机制）：
+     * 它们的标题经常是歌词行，歌曲信息要反过来从 ARTIST 里取。
+     */
+    val ARTIST_STRUCTURE_PACKAGES: Set<String> = setOf(
+        "com.kugou.android",
+        "com.kugou.android.lite",
+        QQ_PACKAGE
+    )
+
     /**
      * 需要「让宿主以为正连着无线音频输出」的播放器。
      *
@@ -68,8 +81,8 @@ object Constants {
             packageName = "cn.wenyu.bodian",
             displayName = "波点音乐",
             sources = listOf(
-                LocalSource(BaseDir.CACHE, "lyric", LyricFormat.LRC, listOf("lrcx", "lrc")),
-                LocalSource(BaseDir.EXTERNAL_CACHE, "lyric", LyricFormat.LRC, listOf("lrcx", "lrc"))
+                LocalSource(BaseDir.CACHE, "lyric", LyricFormat.LRCX, listOf("lrcx", "lrc")),
+                LocalSource(BaseDir.EXTERNAL_CACHE, "lyric", LyricFormat.LRCX, listOf("lrcx", "lrc"))
             )
         ),
         LocalRecipe(
@@ -78,6 +91,23 @@ object Constants {
             sources = listOf(
                 LocalSource(BaseDir.EXTERNAL_FILES, "qqmusic/qrc", LyricFormat.QRC, listOf("qrc")),
                 LocalSource(BaseDir.FILES, "qqmusic/qrc", LyricFormat.QRC, listOf("qrc"))
+            )
+        ),
+        // 酷我：歌词缓存（krc / lrc）散落在自己的私有目录，不同版本路径不一样，
+        // 能命中哪个算哪个；都没有还会由 findInOwnStorage 扫一遍自己的目录。
+        // 之前完全没有配方，酷我全程只能等网络嗅探，而它的歌词请求不走 okhttp，
+        // 结果永远只推得出歌曲名和歌手（用户反馈）。
+        LocalRecipe(
+            packageName = KUWO_PACKAGE,
+            displayName = "酷我音乐",
+            sources = listOf(
+                LocalSource(BaseDir.FILES, "lyric", LyricFormat.KRC, listOf("krc", "lrc")),
+                LocalSource(BaseDir.FILES, "lyrics", LyricFormat.KRC, listOf("krc", "lrc")),
+                LocalSource(BaseDir.CACHE, "lyric", LyricFormat.KRC, listOf("krc", "lrc")),
+                LocalSource(BaseDir.CACHE, "lyrics", LyricFormat.KRC, listOf("krc", "lrc")),
+                LocalSource(BaseDir.FILES, "krc", LyricFormat.KRC, listOf("krc", "lrc")),
+                LocalSource(BaseDir.EXTERNAL_FILES, "kwmusic/lyric", LyricFormat.LRC, listOf("lrc", "krc")),
+                LocalSource(BaseDir.EXTERNAL_FILES, "kwmusic/krc", LyricFormat.KRC, listOf("krc", "lrc"))
             )
         ),
         LocalRecipe(

@@ -1,5 +1,12 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
+}
+
+// 版本来自工程根目录的 version.properties，避免每次改版本要动多处
+val versionProps = Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
 }
 
 android {
@@ -10,8 +17,8 @@ android {
         applicationId = "io.github.proify.lyricon.xinghe"
         minSdk = 27
         targetSdk = 36
-        versionCode = 11
-        versionName = "1.10"
+        versionCode = versionProps.getProperty("versionCode").trim().toInt()
+        versionName = versionProps.getProperty("versionName").trim()
     }
 
     signingConfigs {

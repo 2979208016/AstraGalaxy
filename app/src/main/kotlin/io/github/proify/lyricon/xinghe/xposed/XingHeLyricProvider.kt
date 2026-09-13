@@ -6,6 +6,7 @@ import android.content.Context
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -65,6 +66,21 @@ internal class XingHeLyricProvider(
 
     private var lastPublishedSignature: String? = null
 
+    /** 当前歌曲所在的 MediaSession 身份（MeloYou 进程里可能同时存在多个会话） */
+    @Volatile
+    private var activeSessionHash: Int = 0
+
+    /** 当前歌曲的 MediaSession 实例（只读查询它的 extras 用） */
+    @Volatile
+    private var activeSessionRef: java.lang.ref.WeakReference<MediaSession>? = null
+
+    /** 会话 extras 里还没认领的歌词（歌曲信息未到时先缓存） */
+    @Volatile
+    private var pendingSessionLyrics: List<RichLyricLine>? = null
+
+    /** 诊断日志节流用 */
+    private var diagLastAt: Long = 0L
+
     /** 最近一次从 MediaMetadata 提取到的时长（毫秒） */
     @Volatile
     private var metadataDurationMs: Long = 0L
@@ -110,6 +126,7 @@ internal class XingHeLyricProvider(
         hookApplicationLifecycle()
         hookMediaSession()
         hookMeloYouFiles()
+        hookMeloYouSessionDiag()
         hookApplicationOnCreate()
         logger.info("All MeloYou hooks installed")
         mainHandler.postDelayed({ ensureStarted() }, 700L)
@@ -180,6 +197,9 @@ internal class XingHeLyricProvider(
             }
         }
         replayFromDisk(ctx)
+        logger.info(
+            "MeloYou 启动补读完成：歌曲=${currentMeta?.name} 歌词=${lyricForCurrentSong?.size ?: 0} 行 provider=${provider != null}"
+        )
         mainHandler.removeCallbacks(progressTicker)
         mainHandler.post(progressTicker)
     }
@@ -200,8 +220,9 @@ internal class XingHeLyricProvider(
             playerPackageName = context.packageName,
             logo = ProviderLogo.fromSvg(Constants.ICON)
         ).apply {
-            player.setDisplayTranslation(true)
-            player.setDisplayRoma(true)
+            // 翻译 / 音译开关归星流管，不再主动打开
+            player.setDisplayTranslation(false)
+            player.setDisplayRoma(false)
             register()
         }
         provider = created
@@ -241,7 +262,10 @@ internal class XingHeLyricProvider(
             MediaMetadata::class.java
         )
         installProtectiveAfterHook(metadataMethod, "MediaSession.setMetadata") { chain, _ ->
-            onMetadataChanged(chain.args.getOrNull(0) as? MediaMetadata)
+            onMetadataChanged(
+                chain.thisObject as? MediaSession,
+                chain.args.getOrNull(0) as? MediaMetadata
+            )
         }
 
         val playbackMethod = MediaSession::class.java.getDeclaredMethod(
@@ -249,7 +273,24 @@ internal class XingHeLyricProvider(
             PlaybackState::class.java
         )
         installProtectiveAfterHook(playbackMethod, "MediaSession.setPlaybackState") { chain, _ ->
-            onPlaybackStateChanged(chain.args.getOrNull(0) as? PlaybackState)
+            onPlaybackStateChanged(
+                chain.thisObject as? MediaSession,
+                chain.args.getOrNull(0) as? PlaybackState
+            )
+        }
+
+        // MeloYou 不走「标准」歌词通道：它把当前歌词直接塞进 MediaSession 的 extras
+        // （lyric_timestamps 毫秒数组 + lyric_texts 文本数组），这是它自己认定的当前歌曲歌词。
+        // songLyric.json 只留「最近一首」，会话 extras 才是随歌曲信息一起刷新的那份。
+        val extrasMethod = MediaSession::class.java.getDeclaredMethod(
+            "setExtras",
+            Bundle::class.java
+        )
+        installProtectiveAfterHook(extrasMethod, "MediaSession.setExtras") { chain, _ ->
+            onSessionExtras(
+                chain.thisObject as? MediaSession,
+                chain.args.getOrNull(0) as? Bundle
+            )
         }
     }
 
@@ -257,10 +298,25 @@ internal class XingHeLyricProvider(
     @Volatile
     private var lastMetadataSignature: String? = null
 
+    /** 上一次记录过的歌曲信息（同一首歌会反复写 nowPlaying.json，避免刷屏） */
+    private var lastSongInfoKey: String? = null
+
     /** MeloYou 歌词文件重试计数 */
     private var meloAttempts = 0
 
     private val meloRetry = Runnable { refreshFromDisk() }
+
+    /** 重读循环是否正在跑（避免几条触发路径互相重置计数） */
+    private var meloRetryActive = false
+
+    /** 主动重读磁盘上的歌曲信息 / 歌词；restart=true 表示换歌，强制重新开始计数 */
+    private fun scheduleMeloRetry(restart: Boolean = false) {
+        if (meloRetryActive && !restart) return
+        meloAttempts = 0
+        meloRetryActive = true
+        mainHandler.removeCallbacks(meloRetry)
+        mainHandler.post(meloRetry)
+    }
 
     /**
      * MeloYou 的触发点。
@@ -269,7 +325,7 @@ internal class XingHeLyricProvider(
      * 因此不能只依赖文件写入回调；这里以 MediaSession 的歌名/歌手变化作为切歌信号，
      * 主动去读它自己导出的 nowPlaying.json（歌曲信息）与 songLyric.json（歌词）。
      */
-    private fun onMetadataChanged(metadata: MediaMetadata?) {
+    private fun onMetadataChanged(session: MediaSession?, metadata: MediaMetadata?) {
         metadata ?: return
         val duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION)
         if (duration > 0) metadataDurationMs = duration
@@ -280,18 +336,26 @@ internal class XingHeLyricProvider(
             ?.takeIf { it.isNotBlank() && it != "未知歌手" }
 
         ensureStarted()
+        // 歌词行 / 制作信息行被当成标题时不能算切歌（酷狗、QQ 都会这么干）
+        if (PlayerTitle.isSuspectTitle(title) && currentMeta != null) {
+            logger.debug("忽略可疑标题（疑似歌词行 / 制作信息）：$title")
+            return
+        }
+        rememberActiveSession(session)
         val signature = "$title|$artist"
         if (signature == lastMetadataSignature) return
         lastMetadataSignature = signature
         logger.info("MeloYou metadata changed: $title - $artist")
 
+        var sameSong = false
         synchronized(stateLock) {
-            val sameSong = currentMeta?.name?.let { normalize(it) == normalize(title) } == true
+            sameSong = currentMeta?.name?.let { normalize(it) == normalize(title) } == true
             if (!sameSong) {
                 lyricForCurrentSong = null
                 currentSongId = null
                 lastPublishedSignature = null
                 lastSongSwitchWall = System.currentTimeMillis()
+            pendingSessionLyrics = null
             }
             currentMeta = SongMeta(
                 id = if (sameSong) currentMeta?.id else null,
@@ -301,10 +365,14 @@ internal class XingHeLyricProvider(
             )
         }
 
-        publishPlaceholder()
-        meloAttempts = 0
-        mainHandler.removeCallbacks(meloRetry)
-        mainHandler.post(meloRetry)
+        // 同一首歌重发元数据（冷启动继续播上一首必定发生）不能推空歌词占位：
+        // 那会把刚落地的歌词清掉，而且签名去重会让它再也补不回来（表现为「卡在一句不动」）。
+        if (!sameSong || !isLyricReady()) {
+            publishPlaceholder()
+        } else {
+            logger.debug("同歌元数据到达：已有歌词，跳过占位快照")
+        }
+        scheduleMeloRetry(restart = true)
     }
 
     /**
@@ -333,9 +401,21 @@ internal class XingHeLyricProvider(
             logger.error("MeloYou refreshFromDisk failed", throwable)
         }
 
-        if (!isLyricReady() && meloAttempts < MELO_MAX_ATTEMPTS) {
+        // 会话 extras 里 MeloYou 自己维护的当前歌词（比磁盘文件可靠）
+        pendingSessionLyrics?.let { lines ->
+            if (!currentMeta?.name.isNullOrBlank() && belongsToCurrentSong(lines)) {
+                pendingSessionLyrics = null
+                synchronized(stateLock) { lyricForCurrentSong = lines }
+                publishIfReady()
+            }
+        }
+
+        if (!isLyricReady() && meloAttempts < MELO_RETRY_DELAYS_MS.size) {
+            val delay = MELO_RETRY_DELAYS_MS[meloAttempts]
             meloAttempts++
-            mainHandler.postDelayed(meloRetry, MELO_RETRY_DELAY_MS)
+            mainHandler.postDelayed(meloRetry, delay)
+        } else {
+            meloRetryActive = false
         }
     }
 
@@ -353,42 +433,51 @@ internal class XingHeLyricProvider(
     }
 
 
-    private fun onPlaybackStateChanged(state: PlaybackState?) {
+    private fun onPlaybackStateChanged(session: MediaSession?, state: PlaybackState?) {
         state ?: return
 
         ensureStarted()
+        // MeloYou 切歌/起播瞬间会同时刷新不止一个 MediaSession 的进度，
+        // 只有「当前歌曲所在的那个会话」才可信，否则会把上一首或预载流的进度当成当前进度。
+        if (DIAG_LOG) {
+            logger.info(
+                "DIAG state: session=" + System.identityHashCode(session) +
+                    " pos=" + state.position + " state=" + state.state +
+                    " speed=" + state.playbackSpeed + " upd=" + state.lastPositionUpdateTime
+            )
+        }
+        if (!isActiveSession(session)) {
+            logger.debug("忽略非当前 MediaSession 的进度：pos=${state.position}")
+            return
+        }
         val position = state.position
-        val newPlaying = state.state == PlaybackState.STATE_PLAYING
+        val newPlaying = playingOf(state.state, position)
 
         if (position >= 0L) {
-            if (shouldAcceptAnchor(position, newPlaying)) {
-                val expected = extrapolatedPosition()
-                // 轻微回跳（≤2s 抖动）时按推算值平滑，保持滚动单调，避免来回跳
-                val accepted = if (position < expected && position >= expected - BACKWARD_TOLERANCE_MS) {
-                    expected
-                } else {
-                    position
-                }
-                anchorPosition = accepted
-                anchorRealtime = SystemClock.elapsedRealtime()
-                confirmedPosition = accepted
-                hasAnchor = true
-                isPlaying = newPlaying
-                playbackSpeed = state.playbackSpeed.takeIf { it > 0f } ?: 1.0f
-                logger.debug(
-                    "Anchor accepted: position=$position playing=$newPlaying speed=$playbackSpeed"
-                )
+            // 播放器给的显式位置一律采纳。以前这里会拒绝「和推算值差太远」的位置，
+            // 结果 MeloYou 这类播放器一拖进度条，锚点就永远停在旧位置，
+            // 歌词越跑越偏（用户反馈的「拉了进度条歌词就对不上歌」）。
+            val expected = extrapolatedPosition()
+            // 轻微回跳（≤2s 抖动）时按推算值平滑，保持滚动单调，避免来回跳
+            val accepted = if (hasAnchor && position < expected &&
+                position >= expected - BACKWARD_TOLERANCE_MS
+            ) {
+                expected
             } else {
-                // 脏锚点：完全忽略（不采纳位置，也不改动播放状态），保持原锚点继续推算
-                logger.debug(
-                    "Anchor REJECTED (dirty): position=$position playing=$newPlaying " +
-                        "extrapolated=${extrapolatedPosition()}"
-                )
+                position
             }
+            anchorPosition = accepted
+            anchorRealtime = SystemClock.elapsedRealtime()
+            confirmedPosition = accepted
+            hasAnchor = true
+            isPlaying = newPlaying
+            playbackSpeed = state.playbackSpeed.takeIf { it > 0f } ?: 1.0f
+            logger.debug(
+                "Anchor accepted: position=$position playing=$newPlaying speed=$playbackSpeed"
+            )
         } else {
             isPlaying = newPlaying
         }
-
         // 立即同步一次，让状态/seek 即时生效
         tickProgress()
     }
@@ -401,17 +490,30 @@ internal class XingHeLyricProvider(
      *  - 轻微回跳（≤2s，seek 抖动）-> 接受；
      *  - 播放中大幅回跳（尤其归零）-> 拒绝，视为脏数据。
      */
+    /**
+     * 播放状态判定：
+     *  - 只有真正的暂停 / 停止 / 出错才算「没在播」；
+     *  - 缓冲 / 连接 / 切歌过渡（BUFFERING / CONNECTING / SKIPPING_*）都按继续播处理，
+     *    否则 MeloYou、酷我一缓冲就把进度冻住，表现就是「拉了进度条歌词就卡住」；
+     *  - 暂停 / 停止但位置未知（-1）：保持上一次状态，这类回调多出现在 seek 过渡中。
+     */
+    private fun playingOf(state: Int, position: Long): Boolean = when (state) {
+        PlaybackState.STATE_PAUSED,
+        PlaybackState.STATE_STOPPED,
+        PlaybackState.STATE_ERROR -> if (position >= 0L) false else isPlaying
+
+        PlaybackState.STATE_NONE -> isPlaying
+        else -> true
+    }
+
     private fun shouldAcceptAnchor(newPosition: Long, newPlaying: Boolean): Boolean {
         if (!hasAnchor) return true
-        // 切歌后 2.5s 内：只接受从头附近的位置，旧歌残留的大 position 一律忽略
-        if (isRecentSongSwitch() && newPosition > SWITCH_MAX_ACCEPT_MS) return false
-        val expected = extrapolatedPosition()
-        // 进度几乎没动（±2s 内）或前进 -> 正常
-        if (newPosition >= expected - BACKWARD_TOLERANCE_MS) return true
-        // 播放中大幅回跳 -> 拒绝（同时不改动 isPlaying，避免进度冻结）
-        if (isPlaying && newPlaying) return false
-        // 暂停态下回跳：可能是真实 seek；若回跳到 0 且之前已播很久，仍按脏数据处理
-        if (newPosition <= 0L && expected > ZERO_RESET_IGNORE_MS) return false
+        // 同 LocalLyricProvider：显式位置一律采纳，否则拖动进度条后
+        // 歌词会永远停在旧锚点上（「卡住 / 对不上歌」）。
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastSongSwitchRealtime < ANCHOR_SWITCH_GRACE_MS &&
+            newPosition > SWITCH_MAX_ACCEPT_MS
+        ) return false
         return true
     }
 
@@ -473,10 +575,18 @@ internal class XingHeLyricProvider(
             )
         }
 
+        val infoKey = "$rid|$name|$artist|$songChanged"
+        if (infoKey != lastSongInfoKey) {
+            lastSongInfoKey = infoKey
+            logger.info("MeloYou 歌曲信息：id=$rid name=$name artist=$artist 换歌=$songChanged")
+        }
+        if (!isLyricReady()) scheduleMeloRetry()
+
         // 切歌：记录切歌时刻（用于忽略旧 position 残留），并重置进度锚点归零
         if (songChanged) {
             lastSongSwitchRealtime = SystemClock.elapsedRealtime()
             lastSongSwitchWall = System.currentTimeMillis()
+            pendingSessionLyrics = null
             anchorPosition = 0L
             anchorRealtime = SystemClock.elapsedRealtime()
             hasAnchor = true
@@ -512,8 +622,14 @@ internal class XingHeLyricProvider(
     }
 
     private fun replayFromDisk(context: Context) {
-        readAppFile(context, Constants.NOW_PLAYING_FILE)?.let(::onNowPlayingWritten)
-        readAppFile(context, Constants.SONG_LYRIC_FILE)?.let { onLyricsWritten(context, it) }
+        val nowPlaying = readAppFile(context, Constants.NOW_PLAYING_FILE)
+        val songLyric = readAppFile(context, Constants.SONG_LYRIC_FILE)
+        logger.info(
+            "MeloYou 启动补读：nowPlaying=" + (nowPlaying?.length ?: -1) + "B songLyric=" +
+                (songLyric?.length ?: -1) + "B 已认歌曲=" + currentMeta?.name
+        )
+        if (!nowPlaying.isNullOrBlank()) onNowPlayingWritten(nowPlaying)
+        if (!songLyric.isNullOrBlank()) onLyricsWritten(context, songLyric)
     }
 
     // ---------------- 数据装配与发布 ----------------
@@ -541,6 +657,9 @@ internal class XingHeLyricProvider(
             this.lyrics = emptyList()
         }
         val ok = runCatching { p.player.setSong(song) }.getOrDefault(false)
+        // 占位快照不是「歌词发布」：清掉发布签名，之后歌词一到（会话 extras / 磁盘文件）
+        // 必须还能补推一次，否则星流那边就只剩这个没有歌词的空快照。
+        lastPublishedSignature = null
         logger.info("切歌占位：$id ${meta.name}, ok=$ok")
     }
 
@@ -555,12 +674,50 @@ internal class XingHeLyricProvider(
         val want = currentMeta?.name ?: return true
         val wantKey = coreTitle(want)
         if (wantKey.isEmpty()) return true
+
+        // 1) 首行自带歌名：MeloYou 会把「歌名 - 歌手」写在第一行，最可靠
         val head = normalize(lines.firstOrNull()?.text)
-        if (head.contains(wantKey)) return true
-        val fileTitle = normalize(currentFileSongName())
-        if (fileTitle.isNotEmpty() && fileTitle.contains(wantKey)) return true
+        if (head.contains(wantKey)) {
+            logger.debug("MeloYou 歌词首行匹配：<" + head + "> ~ <" + wantKey + ">")
+            return true
+        }
+
+        val context = application
+        val songId = currentSongId
+        if (context != null) {
+            val lyricFile = runCatching {
+                context.getFileStreamPath(Constants.SONG_LYRIC_FILE)
+            }.getOrNull()
+            val stamp = if (lyricFile != null && lyricFile.isFile) {
+                lyricFile.lastModified() to lyricFile.length()
+            } else null
+
+            // 2) 同一首歌已经验证过这个文件（MeloYou 对同一首歌不会重写歌词文件）
+            if (stamp != null && songId != null && acceptedLyricFiles[songId] == stamp) return true
+
+            // 3) 歌词文件不早于 nowPlaying.json：说明它就是随本次歌曲信息一起写的
+            val nowPlayingAt = runCatching {
+                context.getFileStreamPath(Constants.NOW_PLAYING_FILE).lastModified()
+            }.getOrDefault(0L)
+            if (lyricFile != null && lyricFile.isFile &&
+                lyricFile.lastModified() >= nowPlayingAt - FILE_FRESH_TOLERANCE_MS
+            ) {
+                if (stamp != null && songId != null) acceptedLyricFiles[songId] = stamp
+                return true
+            }
+
+            // 其余情况：文件还是上一首的（MeloYou 没重写），等它写新的
+            logger.info(
+                "MeloYou 歌词文件属于其它歌曲（当前=$want, 文件时间=${lyricFile?.lastModified()}, " +
+                    "歌曲信息时间=$nowPlayingAt）"
+            )
+            return false
+        }
         return System.currentTimeMillis() - lastSongSwitchWall <= FILE_FRESH_WINDOW_MS
     }
+
+    /** 已为某首歌验证过的歌词文件指纹（mtime + 大小） */
+    private val acceptedLyricFiles = HashMap<String, Pair<Long, Long>>()
 
     /** 歌名核心词：去掉《》与括号说明、后半段副标题 */
     private fun coreTitle(raw: String): String {
@@ -571,16 +728,6 @@ internal class XingHeLyricProvider(
         }
         if (cut > 1) text = text.substring(0, cut)
         return normalize(text)
-    }
-
-    /** nowPlaying.json 里 MeloYou 自己写的歌名 */
-    private fun currentFileSongName(): String? {
-        val context = application ?: return null
-        return runCatching {
-            readAppFile(context, Constants.NOW_PLAYING_FILE)
-                ?.let { JSONObject(it).optString("name") }
-                ?.takeIf { it.isNotBlank() && it != "null" }
-        }.getOrNull()
     }
 
     private fun publishIfReady() {
@@ -598,6 +745,7 @@ internal class XingHeLyricProvider(
         // 导致词幕端误判新歌、把歌词位置重置回开头。
         if (lyrics.isNullOrEmpty()) {
             scheduleDelayedPublish()
+            schedulePlaceholderFallback()
             return
         }
 
@@ -611,6 +759,9 @@ internal class XingHeLyricProvider(
         }
         if (signature == lastPublishedSignature) return
         lastPublishedSignature = signature
+
+        // 只推原文：译文 / 音译交给星流的开关
+        lyrics?.forEach { it.translation = null }
 
         val song = Song().apply {
             this.id = meta.id!!.let { "meloyou:$it" }
@@ -629,6 +780,28 @@ internal class XingHeLyricProvider(
         } catch (throwable: Throwable) {
             logger.error("setSong failed", throwable)
         }
+    }
+    /**
+     * 歌曲信息已经拿到、歌词却迟迟不到时，先推一条「只有歌曲信息」的快照。
+     *
+     * 冷启动继续播上一首时最容易踩到：MeloYou 不重发元数据，也可能不再重写歌词文件，
+     * 星流若一直没收到这个歌曲 id，就会把上一首的歌词一直挂在胶囊上（用户反馈的「卡在一句不动」）。
+     * 同一首歌只在没有歌词时推一次，因此不会把已经显示出来的歌词清掉。
+
+     */
+    private val placeholderFallback = Runnable {
+        val meta = synchronized(stateLock) { currentMeta } ?: return@Runnable
+        val id = meta.id ?: return@Runnable
+        if (isLyricReady()) return@Runnable
+        if (lastPublishedSignature?.startsWith("$id|") == true) return@Runnable
+        if (lastPlaceholderSignature == "$id|" + meta.name + "|" + meta.artist) return@Runnable
+        logger.info("歌词未到，先推歌曲信息占位：" + id + " " + meta.name)
+        publishPlaceholder()
+    }
+
+    private fun schedulePlaceholderFallback() {
+        mainHandler.removeCallbacks(placeholderFallback)
+        mainHandler.postDelayed(placeholderFallback, PLACEHOLDER_FALLBACK_MS)
     }
 
     private fun scheduleDelayedPublish() {
@@ -703,7 +876,119 @@ internal class XingHeLyricProvider(
         val duration: Long = 0L
     )
 
+    // ---------------- MediaSession 会话歌词（MeloYou 专属） ----------------
+
+    /** 记下当前歌曲所在的 MediaSession（MeloYou 进程里不止一个会话在刷新） */
+    private fun rememberActiveSession(session: MediaSession?) {
+        if (session == null) return
+        activeSessionRef = java.lang.ref.WeakReference(session)
+        val hash = System.identityHashCode(session)
+        if (hash != activeSessionHash) {
+            activeSessionHash = hash
+            logger.debug("当前 MediaSession 会话：$hash")
+        }
+    }
+
+    /** 该会话是否是当前歌曲所在的会话（还没认出来之前一律接受） */
+    private fun isActiveSession(session: MediaSession?): Boolean {
+        val current = activeSessionRef?.get() ?: return true
+        return session == null || session === current
+    }
+
+    /**
+     * MeloYou 把当前歌词写进 MediaSession 的 extras：
+     *  - lyric_timestamps：long[]（毫秒），lyric_texts：String[]，即当前歌曲整首歌词；
+     *  - current_lyric / current_lyric_time / current_lyric_index：当前这一句。
+     * 这是它自己认定的「当前歌曲」歌词，优先用它，磁盘文件只当兜底。
+     */
+    private fun onSessionExtras(session: MediaSession?, extras: Bundle?) {
+        extras ?: return
+        if (!isActiveSession(session)) {
+            logger.debug("忽略非当前 MediaSession 的歌词 extras")
+            return
+        }
+        val lines = parseSessionLyrics(extras) ?: return
+        if (DIAG_LOG) {
+            logger.info(
+                "DIAG extras: 行数=" + lines.size + " 首行=" + lines.firstOrNull()?.text +
+                    " 末行=" + lines.lastOrNull()?.text +
+                    " 当前句=" + extras.getString("current_lyric") +
+                    " 当前句时间=" + extras.getLong("current_lyric_time") +
+                    " 当前句下标=" + extras.getInt("current_lyric_index", -1)
+            )
+        }
+        val current = synchronized(stateLock) { currentMeta }
+        if (current?.name.isNullOrBlank()) {
+            pendingSessionLyrics = lines
+            logger.info("等待歌曲信息，先缓存会话歌词（首行=${lines.firstOrNull()?.text}）")
+            return
+        }
+        if (!belongsToCurrentSong(lines)) {
+            logger.info(
+                "忽略不匹配的 MeloYou 会话歌词（当前=${current?.name}，会话首行=${lines.firstOrNull()?.text}）"
+            )
+            return
+        }
+        val changed = synchronized(stateLock) {
+            val old = lyricForCurrentSong
+            if (old != null && old.size == lines.size &&
+                old.lastOrNull()?.text == lines.lastOrNull()?.text
+            ) {
+                false
+            } else {
+                lyricForCurrentSong = lines
+                true
+            }
+        }
+        if (changed) {
+            pendingSessionLyrics = null
+            logger.info("MeloYou 会话歌词：${lines.size} 行（首行=${lines.firstOrNull()?.text}）")
+        }
+        publishIfReady()
+    }
+
+    /** 解析会话 extras 里的歌词数组；没有歌词返回 null */
+    private fun parseSessionLyrics(extras: Bundle): List<RichLyricLine>? {
+        val times = extras.getLongArray("lyric_timestamps") ?: return null
+        val texts = extras.getStringArray("lyric_texts") ?: return null
+        val count = minOf(times.size, texts.size)
+        if (count <= 0) return null
+        val items = ArrayList<Pair<Long, String>>(count)
+        for (i in 0 until count) {
+            val text = texts[i]?.trim().orEmpty()
+            if (text.isEmpty()) continue
+            if (PLACEHOLDER_PATTERNS.any { text.contains(it) }) continue
+            items.add(times[i] to text)
+        }
+        if (items.isEmpty()) return null
+        items.sortBy { it.first }
+        return items.mapIndexed { index, (begin, text) ->
+            val end = items.getOrNull(index + 1)?.first ?: (begin + 3000L)
+            RichLyricLine(begin = begin, end = end, text = text)
+        }
+    }
+
+    /** 诊断：MeloYou 自己的播放进度取值点（只读旁路，交付前移除） */
+    private fun hookMeloYouSessionDiag() {
+        if (!DIAG_LOG) return
+        runCatching {
+            val method = Class.forName("H1.a", false, classLoader).getDeclaredMethod("a")
+            installProtectiveAfterHook(method, "DIAG H1.a.a") { _, result ->
+                val value = (result as? Long) ?: -1L
+                val now = SystemClock.elapsedRealtime()
+                if (now - diagLastAt > 1500L) {
+                    diagLastAt = now
+                    logger.info("DIAG 播放器进度 a()=$value")
+                }
+            }
+        }.onFailure { logger.warn("DIAG 无法挂钩播放器进度：${it.message}") }
+    }
     companion object {
+
+
+        /** 诊断开关（交付前必须置回 false） */
+        private const val DIAG_LOG = true
+
         /** 进度推送间隔：足够密以保持歌词跟手，又不至于过度 IPC（毫秒） */
         private const val TICK_INTERVAL_MS = 48L
 
@@ -719,15 +1004,30 @@ internal class XingHeLyricProvider(
         /** 切歌后忽略旧 position 残留的窗口 */
         private const val SONG_SWITCH_IGNORE_MS = 2500L
 
+        /** 切歌后只忽略这么久的「上一首残留 position」 */
+        private const val ANCHOR_SWITCH_GRACE_MS = 400L
+
         /** 切歌窗口内允许的最大 position（超过视为旧歌残留） */
         private const val SWITCH_MAX_ACCEPT_MS = 8000L
 
-        /** MeloYou 歌词文件重试上限与间隔 */
-        private const val MELO_MAX_ATTEMPTS = 12
-        private const val MELO_RETRY_DELAY_MS = 1500L
+        /**
+         * MeloYou 歌词文件重试节奏（毫秒）。MeloYou 是「先切歌、后拉歌词」，
+         * 缓存命中几乎立刻落盘，首次在线拉取可能要几十秒，
+         * 因此退避到约 2 分钟——退得太早就是「歌词刷新不及时」。
+         */
+        private val MELO_RETRY_DELAYS_MS = longArrayOf(
+            800L, 1200L, 1800L, 2500L, 3500L, 5000L, 7000L,
+            9000L, 12000L, 16000L, 20000L, 25000L, 30000L, 30000L
+        )
+
+        /** 歌词文件比 nowPlaying.json 新（含容差）→ 一定属于当前歌曲 */
+        private const val FILE_FRESH_TOLERANCE_MS = 1500L
 
         /** 歌词未到时延迟发布的时长 */
         private const val DELAYED_PUBLISH_MS = 1200L
+
+        /** 歌曲信息已到、歌词迟迟未到时，先推一条占位快照的延迟 */
+        private const val PLACEHOLDER_FALLBACK_MS = 1500L
 
         private val PLACEHOLDER_PATTERNS = listOf(
             "歌曲暂无歌词",
