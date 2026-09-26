@@ -1,19 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 仅用于设置页里的「检查更新」；模块本体不联网 -->
+    <!-- 仅用于「打开 GitHub 项目主页」这类显式跳转；模块本体不联网 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!--
-        包可见性：Android 11+ 默认看不到其它应用，
-        不加这段 getLaunchIntentForPackage("org.lsposed.manager") 会返回 null，
-        界面就会误报「未检测到 LSPosed」。
-    -->
+    <!-- 向星河岛投送内容项。权限由星流（宿主）定义，普通级别，不弹授权框。 -->
+    <uses-permission android:name="com.astraisland.permission.PUBLISH_ACTIVITY" />
+
     <queries>
         <package android:name="org.lsposed.manager" />
+        <!-- 星河岛宿主（星流正式 / 调试包） -->
+        <package android:name="com.astraflow.tool" />
+        <package android:name="com.astraflow.tool.debug" />
+        <!-- 设置页要列出可用的浏览器，需要能看见处理 http 的应用 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="http" />
+        </intent>
     </queries>
 
     <application
+        android:name=".app.XingHeApp"
         android:allowBackup="true"
         android:description="@string/xposed_description"
         android:icon="@mipmap/ic_launcher"
@@ -22,14 +33,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.LyricProvider">
 
-        <!--
-            设置页本体：始终启用。
-            除了桌面 alias，这里额外声明 MAIN + CATEGORY_INFO，
-            这样即使桌面图标被隐藏（alias 被禁用），
-            LSPosed 仍能用 getLaunchIntentForPackage 找到并打开本页。
-        -->
+        <!-- 设置页 -->
         <activity
-            android:name=".ui.SettingsActivity"
+            android:name=".ui.page.SettingsActivity"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.LyricProvider">
@@ -39,7 +45,7 @@
             </intent-filter>
         </activity>
 
-        <!-- 桌面入口用 alias：桌面显示的名字只由这里决定 -->
+        <!-- 桌面入口 alias -->
         <activity-alias
             android:name=".ui.LauncherAlias"
             android:enabled="true"
@@ -47,7 +53,7 @@
             android:icon="@mipmap/ic_launcher"
             android:label="@string/app_name_launcher"
             android:roundIcon="@mipmap/ic_launcher_round"
-            android:targetActivity=".ui.SettingsActivity"
+            android:targetActivity=".ui.page.HomeActivity"
             android:theme="@style/Theme.LyricProvider">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -55,19 +61,60 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- 首页 -->
+        <activity
+            android:name=".ui.page.HomeActivity"
+            android:exported="true"
+            android:label="@string/app_name_launcher"
+            android:theme="@style/Theme.LyricProvider" />
+
+        <!-- 能力详情页 -->
+        <activity
+            android:name=".ui.page.LyricDetailActivity"
+            android:exported="false"
+            android:label="@string/cap_lyric"
+            android:parentActivityName=".ui.page.HomeActivity"
+            android:theme="@style/Theme.LyricProvider.Detail" />
+        <activity
+            android:name=".ui.page.LinkDetailActivity"
+            android:exported="false"
+            android:label="@string/cap_link"
+            android:parentActivityName=".ui.page.HomeActivity"
+            android:theme="@style/Theme.LyricProvider.Detail" />
+
+        <!-- 打开链接的中转页（透明、瞬间 finish） -->
+        <activity
+            android:name=".capability.link.LinkOpenActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.LyricProvider.Transparent" />
+
+        <!-- 底部抽屉 -->
+        <activity
+            android:name=".ui.page.SheetActivity"
+            android:exported="false"
+            android:theme="@style/Theme.LyricProvider.Sheet"
+            android:excludeFromRecents="true"
+            android:noHistory="true" />
+
+        <!-- 链接投递入口（ContentProvider，Binder 直连，不受广播管控影响） -->
+        <provider
+            android:name=".app.LinkInboxProvider"
+            android:authorities="io.github.proify.lyricon.xinghe.inbox"
+            android:exported="true"
+            android:grantUriPermissions="false" />
+
         <!-- ============ LyricON 提供端识别 ============ -->
         <meta-data
             android:name="lyricon_module"
             android:value="true" />
-
         <meta-data
             android:name="lyricon_module_author"
             android:value="@string/lyricon_module_author" />
-
         <meta-data
             android:name="lyricon_module_description"
             android:value="@string/lyricon_module_description" />
-
         <meta-data
             android:name="lyricon_module_tags"
             android:resource="@array/lyricon_module_tags" />
@@ -81,8 +128,8 @@
             android:value="@string/xposed_description" />
         <meta-data
             android:name="xposedminversion"
-            android:value="82" />
-        <!-- 推荐作用域：作用域开放（staticScope=false），用户可自行增删 -->
+            android:value="102" />
+        <!-- 链接助手只需勾「系统框架」（system），歌词胶囊勾播放器进程 -->
         <meta-data
             android:name="xposedscope"
             android:resource="@array/xposed_scope" />

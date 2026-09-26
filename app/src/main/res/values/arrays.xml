@@ -1,17 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 作用域：只列出真正适配过的包名，未适配的不要写进来 -->
+    <!--
+        推荐作用域：作用域开放（staticScope=false），用户可在 LSPosed 中自行增删。
+
+        两条能力的作用域完全不同，各自只勾真正用得上的：
+          歌词胶囊 -> 音乐播放器本体；
+          链接助手 -> 只勾「系统框架」（system）。剪贴板服务
+                     ClipboardService 住在 system_server 里，
+                     用户在任何应用里复制，最终都会走到这里。
+                     这里只做一件事：hook 一个方法、拷出文字、立刻返回，
+                     其余全部在自己的守护线程里完成，开机不会崩。
+
+        ⚠️ com.music（MeloYou）故意不放进默认作用域。
+        它被勾选后会导致「安装后无法正常重启」，机制已确认：
+        它的进程在 5 秒内起了 5 个、每个活约 1 秒就死（崩溃循环），
+        每次注入又打一堆日志，system_server 被日志和反复拉起拖死，开机起不来。
+        卸载重装能解开，正是因为作用域里不再有它。
+        闪退根因（模块早期 hook 触发它的 callingPackage 校验失败）已修，
+        但在确认彻底稳定之前，不要把它加回默认作用域。
+    -->
     <string-array name="xposed_scope">
-        <item>com.music</item>
+        <!-- 歌词胶囊：本地歌词缓存适配 -->
+        <item>cn.kuwo.player</item>
+        <item>com.luna.music</item>
+        <item>com.tencent.qqmusic</item>
         <item>com.kugou.android</item>
         <item>com.kugou.android.lite</item>
-        <item>cn.kuwo.player</item>
-        <item>com.tencent.qqmusic</item>
-        <item>com.luna.music</item>
         <item>com.netease.cloudmusic</item>
         <item>com.heytap.music</item>
         <item>cn.wenyu.bodian</item>
         <item>cn.toside.music.mobile</item>
+        <!-- 链接助手：只在「系统框架」（system）里挂一个剪贴板方法。 -->
+        <item>system</item>
     </string-array>
 
     <string-array name="lyricon_module_tags">

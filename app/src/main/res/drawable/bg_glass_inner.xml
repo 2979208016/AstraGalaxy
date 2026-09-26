@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 卡片内部的小块（按钮、状态条底），比卡片再亮一档 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/glass_inner" />
+    <corners android:radius="16dp" />
+</shape>

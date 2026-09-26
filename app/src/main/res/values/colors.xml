@@ -1,17 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 启动图标底色（保持原样） -->
     <color name="ic_launcher_background">#0B1026</color>
     <color name="white">#FFFFFFFF</color>
 
-    <!-- 界面配色（对齐系统深色卡片风格） -->
-    <color name="bg">#0E1013</color>
-    <color name="card">#1A1D22</color>
-    <color name="card_inner">#23272E</color>
-    <color name="divider">#2A2F37</color>
-    <color name="text">#FFFFFF</color>
-    <color name="text_sub">#8A93A0</color>
+    <!--
+        配色：全站一套。
+        底色更沉一点，卡片靠「半透明 + 模糊」浮起来，
+        描边只用来勾边，不抢视觉。
+    -->
+    <color name="bg">#0A0C10</color>
+    <color name="bg_glow">#12305A</color>
+
+    <!-- 毛玻璃卡片：半透明深色，模糊后才好看 -->
+    <color name="glass">#B314171D</color>
+    <color name="glass_strong">#CC191D24</color>
+    <color name="glass_border">#1FFFFFFF</color>
+    <color name="glass_inner">#0DFFFFFF</color>
+
+    <color name="text">#F2F5FA</color>
+    <color name="text_sub">#9AA3B2</color>
     <color name="text_hint">#6B7480</color>
+
+    <color name="accent">#7CC6FF</color>
+    <color name="accent_soft">#2A4A6B</color>
+    <color name="accent_glow">#4D7CC6FF</color>
+
+    <color name="ok">#7CF5B0</color>
+    <color name="warn">#FFD98A</color>
+    <color name="off">#4A5260</color>
+
     <color name="icon">#C8CFDA</color>
-    <color name="accent">#6FA8FF</color>
-    <color name="accent_soft">#223449</color>
+    <color name="divider">#14FFFFFF</color>
 </resources>

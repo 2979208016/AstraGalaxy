@@ -1,20 +1,7 @@
 pluginManagement {
     repositories {
-        maven {
-            url = uri("https://maven.aliyun.com/repository/google")
-            content {
-                includeGroupByRegex("com\\.android.*")
-                includeGroupByRegex("com\\.google.*")
-                includeGroupByRegex("androidx.*")
-            }
-        }
-        maven {
-            url = uri("https://maven.aliyun.com/repository/central")
-            content {
-                includeGroupByRegex("org\\.jetbrains.*")
-                includeGroupByRegex("io\\.github.*")
-            }
-        }
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/central")
         mavenCentral()
         gradlePluginPortal()
     }

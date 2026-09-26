@@ -1,17 +1,65 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 深色主题：与设置页卡片配色保持一致 -->
+    <!-- 深色主题：贴纸页配色，状态栏透明以便顶部光晕透上来 -->
     <style name="Theme.LyricProvider" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:colorBackground">@color/bg</item>
-        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@color/bg</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowAnimationStyle">@style/Anim.XingHe</item>
     </style>
 
-    <style name="Theme.LyricProvider.Dialog" parent="android:Theme.Material.Dialog.Alert">
-        <item name="android:colorAccent">@color/accent</item>
-        <item name="android:textColorPrimary">@color/text</item>
-        <item name="android:textColorSecondary">@color/text_sub</item>
+    <!-- 细节页：从右侧进入，返回时退出，给一点空间感 -->
+    <style name="Theme.LyricProvider.Detail" parent="Theme.LyricProvider">
+        <item name="android:windowAnimationStyle">@style/Anim.XingHe.Detail</item>
+    </style>
+
+    <!-- 底部抽屉：从下往上滑，带遮罩 -->
+    <style name="Theme.LyricProvider.Sheet" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@style/Anim.XingHe.Sheet</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:colorBackgroundCacheHint">@null</item>
+    </style>
+
+    <!--
+        打开链接的中转页：完全透明、无动画，用户只会看到浏览器打开。
+        把它做成可见界面是为了让系统把它当作「前台语境」，
+        从而允许后续跳转到浏览器（后台直接启动会被拦）。
+    -->
+    <style name="Theme.LyricProvider.Transparent" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <style name="Anim.XingHe" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/slide_in</item>
+        <item name="android:activityOpenExitAnimation">@anim/fade_out</item>
+        <item name="android:activityCloseEnterAnimation">@anim/fade_in</item>
+        <item name="android:activityCloseExitAnimation">@anim/slide_out</item>
+    </style>
+
+    <style name="Anim.XingHe.Detail" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/slide_in</item>
+        <item name="android:activityOpenExitAnimation">@anim/fade_out</item>
+        <item name="android:activityCloseEnterAnimation">@anim/fade_in</item>
+        <item name="android:activityCloseExitAnimation">@anim/slide_out</item>
+    </style>
+
+    <style name="Anim.XingHe.Sheet" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/sheet_in</item>
+        <item name="android:activityOpenExitAnimation">@anim/none</item>
+        <item name="android:activityCloseEnterAnimation">@anim/none</item>
+        <item name="android:activityCloseExitAnimation">@anim/sheet_out</item>
     </style>
 </resources>

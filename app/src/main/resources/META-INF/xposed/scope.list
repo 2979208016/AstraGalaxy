@@ -1,15 +1,33 @@
 # AstraGalaxy 推荐作用域（作用域开放：staticScope=false，用户可在 LSPosed 中自行增删）
+#
+# 两条能力的作用域完全不同，各自只勾真正用得上的：
+#   歌词胶囊  -> 勾「音乐播放器」本身；
+#   链接助手  -> 只勾「系统框架」（system）。
+#                剪贴板服务 ClipboardService 就住在 system_server 里，
+#                用户在任何应用里复制，最终都会走到这里。
+#                这里只做一件事：hook 一个方法、拷出文字、立刻返回，
+#                其余全部在自己的守护线程里完成，开机不会崩。
+#
+# 注意：LSPosed 里「系统框架」的包名是 system，不是 android。
+
+# ============ 歌词胶囊 ============
 # MeloYou（原生歌词文件）
 com.music
-# 本地歌词缓存适配
+# 本地歌词缓存适配：这些平台必须勾选，模块才能读到它们自己缓存的歌词
+cn.kuwo.player
+com.luna.music
+com.tencent.qqmusic
 com.kugou.android
 com.kugou.android.lite
-cn.kuwo.player
-com.tencent.qqmusic
-com.luna.music
 com.netease.cloudmusic
 com.heytap.music
 cn.wenyu.bodian
-
 # 洛雪音乐助手（歌词模块 / JS 桥）
 cn.toside.music.mobile
+
+# ============ 链接助手 ============
+# 勾「系统框架」（system）。剪贴板服务 ClipboardService 住在这个进程里，
+# 模块在这里挂一个方法的回调，用户在任意应用里复制文字都能被送到。
+# ⚠️ 不要勾「系统界面」（com.android.systemui）：那条路已被证实会静默失效，
+#   链接助手不依赖它。
+system

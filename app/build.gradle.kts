@@ -1,5 +1,7 @@
 import java.util.Properties
 
+// 插件由根工程 buildscript 的 classpath 提供（离线构建）。
+// 不用 plugins{} 块，避免 offline 下解析 plugin marker 失败。
 plugins {
     id("com.android.application")
 }
@@ -65,7 +67,14 @@ android {
 dependencies {
     compileOnly("io.github.libxposed:api:102.0.0")
 
+
     implementation("io.github.proify.lyricon:provider:0.1.70")
     implementation("io.github.proify.lyricon.lyric:model:0.1.70")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+
+    // 星河岛接入库（AstraIsland）：挂卡片、收按钮点击都靠它。
+    // LyricON 协议只负责「歌词喇叭」，互动能力在接入库里。
+    implementation(files("libs/astraisland-client.aar"))
+
+    testImplementation("junit:junit:4.13.2")
 }

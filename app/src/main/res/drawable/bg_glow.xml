@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 顶部光晕：一个横向的径向渐变，用来给页面顶部一点呼吸感 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:type="radial"
+        android:centerX="0.5"
+        android:centerY="0"
+        android:gradientRadius="560"
+        android:startColor="@color/accent_glow"
+        android:endColor="#00000000" />
+</shape>

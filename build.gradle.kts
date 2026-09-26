@@ -5,14 +5,13 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        // AGP 9 内置 KGP 版本较低，这里强制提升到缓存中的 2.4.0
+        // AGP 9 + 独立的 Kotlin Gradle 插件（离线缓存里是 2.4.0）
+        classpath("com.android.tools.build:gradle:9.3.1")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.0")
     }
 }
 
-plugins {
-    id("com.android.application") version "9.3.1" apply false
-}
+extra["compileSdk"] = 37
 
 extra["compileSdkVersion"] = 37
 extra["targetSdkVersion"] = 36
