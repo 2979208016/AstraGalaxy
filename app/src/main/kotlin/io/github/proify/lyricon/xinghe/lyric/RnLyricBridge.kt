@@ -25,8 +25,23 @@ internal class RnLyricBridge(
     private val module: XposedModule,
     private val logger: ModuleLogger,
     private val classLoader: ClassLoader,
+    /**
+     * 洛雪 LyricModule 的播放事件回传（只对洛雪生效，其它 RN 播放器传 null）。
+     * 词幕同款做法：play(position)/pause()/setPlaybackRate 直接给精确进度锚点，
+     * toggleTranslation/toggleRoma 同步它界面上的译词开关。
+     */
+    private val lxPlayback: LxPlayback? = null,
     private val onLyric: (LocalLyric, String) -> Unit
 ) {
+
+    /** 洛雪播放事件出口：position 单位是毫秒 */
+    internal interface LxPlayback {
+        fun onPlay(positionMs: Long)
+        fun onPause()
+        fun onRate(rate: Float)
+        fun onDisplayTranslation(display: Boolean)
+        fun onDisplayRoma(display: Boolean)
+    }
 
     private val seen = LinkedHashSet<Int>()
 
@@ -91,7 +106,40 @@ internal class RnLyricBridge(
 
                 method.name == "play" && types.size >= 1 && types[0] == Integer.TYPE -> {
                     installAfterHook(method, "LyricModule#play") { args ->
-                        note("play line=" + args.getOrNull(0))
+                        val pos = (args.getOrNull(0) as? Int)?.toLong() ?: 0L
+                        note("play pos=$pos")
+                        lxPlayback?.onPlay(pos.coerceAtLeast(0L))
+                    }
+                    hooked = true
+                }
+
+                method.name == "pause" -> {
+                    installAfterHook(method, "LyricModule#pause") {
+                        lxPlayback?.onPause()
+                    }
+                    hooked = true
+                }
+
+                method.name == "setPlaybackRate" && types.isNotEmpty() &&
+                    types[0] == java.lang.Float.TYPE -> {
+                    installAfterHook(method, "LyricModule#setPlaybackRate") { args ->
+                        (args.getOrNull(0) as? Float)?.let { lxPlayback?.onRate(it) }
+                    }
+                    hooked = true
+                }
+
+                method.name == "toggleTranslation" && types.isNotEmpty() &&
+                    types[0] == java.lang.Boolean.TYPE -> {
+                    installAfterHook(method, "LyricModule#toggleTranslation") { args ->
+                        (args.getOrNull(0) as? Boolean)?.let { lxPlayback?.onDisplayTranslation(it) }
+                    }
+                    hooked = true
+                }
+
+                method.name == "toggleRoma" && types.isNotEmpty() &&
+                    types[0] == java.lang.Boolean.TYPE -> {
+                    installAfterHook(method, "LyricModule#toggleRoma") { args ->
+                        (args.getOrNull(0) as? Boolean)?.let { lxPlayback?.onDisplayRoma(it) }
                     }
                     hooked = true
                 }

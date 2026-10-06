@@ -93,21 +93,22 @@ object Constants {
                 LocalSource(BaseDir.FILES, "qqmusic/qrc", LyricFormat.QRC, listOf("qrc"))
             )
         ),
-        // 酷我：歌词缓存（krc / lrc）散落在自己的私有目录，不同版本路径不一样，
-        // 能命中哪个算哪个；都没有还会由 findInOwnStorage 扫一遍自己的目录。
-        // 之前完全没有配方，酷我全程只能等网络嗅探，而它的歌词请求不走 okhttp，
-        // 结果永远只推得出歌曲名和歌手（用户反馈）。
+        // 酷我：歌词在 files/KuwoMusic/data/LYRICS_CACHE/*.dat，
+        // 内容是 zlib(base64(XOR("yeelion", LRCX 文本)))（真机实测）。
+        // 文件名是 hash，不含歌名；[ti:]/[ar:] 也可能为空，匹配完全靠时长+新鲜度。
+        // 兜底再由 findInOwnStorage 把 *.dat 按 KUWO_DAT 探一遍。
         LocalRecipe(
             packageName = KUWO_PACKAGE,
             displayName = "酷我音乐",
             sources = listOf(
-                LocalSource(BaseDir.FILES, "lyric", LyricFormat.KRC, listOf("krc", "lrc")),
-                LocalSource(BaseDir.FILES, "lyrics", LyricFormat.KRC, listOf("krc", "lrc")),
-                LocalSource(BaseDir.CACHE, "lyric", LyricFormat.KRC, listOf("krc", "lrc")),
-                LocalSource(BaseDir.CACHE, "lyrics", LyricFormat.KRC, listOf("krc", "lrc")),
-                LocalSource(BaseDir.FILES, "krc", LyricFormat.KRC, listOf("krc", "lrc")),
-                LocalSource(BaseDir.EXTERNAL_FILES, "kwmusic/lyric", LyricFormat.LRC, listOf("lrc", "krc")),
-                LocalSource(BaseDir.EXTERNAL_FILES, "kwmusic/krc", LyricFormat.KRC, listOf("krc", "lrc"))
+                LocalSource(
+                    BaseDir.EXTERNAL_FILES, "KuwoMusic/data/LYRICS_CACHE",
+                    LyricFormat.KUWO_DAT, listOf("dat")
+                ),
+                LocalSource(
+                    BaseDir.FILES, "KuwoMusic/data/LYRICS_CACHE",
+                    LyricFormat.KUWO_DAT, listOf("dat")
+                )
             )
         ),
         LocalRecipe(

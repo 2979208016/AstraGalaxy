@@ -3,10 +3,10 @@
     <string name="app_name">AstraGalaxy</string>
     <string name="app_name_launcher">星河</string>
 
-    <string name="xposed_description">星河 · 星流增强插件。把正在播放的歌词和复制内容里的链接送到星河岛。全部在本机完成，不记录、不上传。</string>
+    <string name="xposed_description">星河 · 星流增强插件。在系统框架中读取全部复制内容（默认开启，仅本地匹配链接上岛，不记录不上传，应用内可关闭）；在音乐应用内旁路读取网络响应（用于嗅探歌词）及改写蓝牙状态查询结果（用于唤醒播放器上报歌词，不连接真实设备）；功能均可在应用内开关单独停用。</string>
 
     <string name="lyricon_module_author">yiyi</string>
-    <string name="lyricon_module_description">星河 · 星流增强插件。当前能力：歌词胶囊、链接助手。创作者：yiyi，免费公益。</string>
+    <string name="lyricon_module_description">星河 · 星流增强插件。读取系统复制内容识别链接，在音乐应用内旁路读取网络响应及改写蓝牙状态查询以获取歌词。全部本地处理，应用内开关可单独停止上述行为。创作者：yiyi，免费公益。</string>
     <string name="module_author_display">创作者：yiyi</string>
     <string name="module_contact_display">QQ：2979208016</string>
     <string name="module_free_display">免费公益</string>
@@ -40,7 +40,7 @@
     <string name="link_browser_pinned">固定使用某个浏览器</string>
     <string name="link_browser_ask">每次让我选择</string>
     <string name="link_browser_pick">选择浏览器</string>
-    <string name="link_privacy_body">只在本机识别复制内容里的链接：不联网、不记录、不上传，识别不到立即丢弃，随时可关。</string>
+    <string name="link_privacy_body">在系统框架中读取复制内容以识别 http/https 链接：全部在本机处理，不联网、不记录、不上传，识别不到立即丢弃。可在应用内随时关闭停止读取。</string>
     <string name="link_island_state">星河岛连接</string>
 
     <string name="ui_switch_enable">启用模块</string>
@@ -64,7 +64,7 @@
     <string name="ui_dialog_ok">知道了</string>
     <string name="ui_dialog_close">关闭</string>
 
-    <string name="ui_about_body">星河是星流（AstraFlow）的增强插件，把正在播放的歌词和复制内容里的链接送到星河岛。\n\n不修改任何应用的行为，全部在本机完成。\n\n在 LSPosed 里启用模块并勾选目标应用，重启应用即可。</string>
+    <string name="ui_about_body">星河是星流（AstraFlow）的增强插件，把正在播放的歌词和复制内容里的链接送到星河岛。\n\n技术行为如实说明：\n1. 链接助手：在系统框架中读取全部复制内容（默认开启），仅用于本地匹配并提取 http/https 链接送上星河岛，不记录、不上传；\n2. 歌词胶囊：在音乐应用内通过旁路只读读取网络响应以嗅探歌词，并改写蓝牙连接状态查询结果以触发播放器上报媒体歌词（不连接真实蓝牙设备）；\n3. 上述行为均可通过本应用内对应的功能开关完全停止。\n\n在 LSPosed 里启用模块并勾选目标应用，重启应用即可。</string>
 
     <string name="ui_author_body">创作者：yiyi\n联系 QQ：2979208016\n\n免费公益，禁止倒卖与付费代装。</string>
 

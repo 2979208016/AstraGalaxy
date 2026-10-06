@@ -11,6 +11,13 @@ val versionProps = Properties().apply {
     rootProject.file("version.properties").inputStream().use { load(it) }
 }
 
+// 签名凭据放在 app/signing.properties（不随交付源码分发）：
+//   storePassword=… / keyAlias=… / keyPassword=…
+// 没有 keystore 或 signing.properties 时 release 不签名，源码照样能构建。
+val signingProps = Properties().apply {
+    file("signing.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+
 android {
     namespace = "io.github.proify.lyricon.xinghe"
     compileSdk = 37
@@ -24,11 +31,14 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            storeFile = file("debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        val ksFile = file("release.keystore")
+        if (ksFile.exists()) {
+            create("release") {
+                storeFile = ksFile
+                storePassword = signingProps.getProperty("storePassword", "")
+                keyAlias = signingProps.getProperty("keyAlias", "astragalaxy")
+                keyPassword = signingProps.getProperty("keyPassword", "")
+            }
         }
     }
 
@@ -36,7 +46,7 @@ android {
         release {
             isMinifyEnabled = false
             isShrinkResources = false
-            signingConfig = signingConfigs.getByName("release")
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
 

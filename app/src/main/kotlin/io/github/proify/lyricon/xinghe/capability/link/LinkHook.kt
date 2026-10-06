@@ -82,6 +82,7 @@ internal class LinkHook(
 
     /** hook 回调：只做最轻的事，立刻返回 */
     private fun onClipSet(service: Any?, args: List<Any?>) {
+        if (!isLinkEnabled()) return
         try {
             val clip = args.getOrNull(0) as? ClipData ?: return
             if (clip.itemCount == 0) return
@@ -104,6 +105,12 @@ internal class LinkHook(
         }
     }
 
+    /** 检查总开关与链接助手开关：关闭时在系统框架中完全不读取剪贴板 */
+    private fun isLinkEnabled(): Boolean = runCatching {
+        val prefs = module.getRemotePreferences(PREFS)
+        prefs.getBoolean(KEY_ENABLED, true) && prefs.getBoolean(KEY_LINK_ENABLED, true)
+    }.getOrDefault(true)
+
     /** 在工作线程里提取链接并投递 */
     private fun push(service: Any?, text: String) {
         val url = LinkPatterns.firstLink(text) ?: return
@@ -119,7 +126,7 @@ internal class LinkHook(
                 url,
                 Bundle().apply { putString(EXTRA_KIND, KIND_CLIPBOARD) }
             )
-            logI("链接已投递：$url")
+            logI("链接已投递")
         }.onFailure { logE("投递失败", it) }
     }
 
@@ -158,6 +165,9 @@ internal class LinkHook(
     }
 
     private companion object {
+        const val PREFS = "xinghe_settings"
+        const val KEY_ENABLED = "module_enabled"
+        const val KEY_LINK_ENABLED = "cap_link_enabled"
         const val CLIPBOARD_SERVICE = "com.android.server.clipboard.ClipboardService"
         const val AUTHORITY = "io.github.proify.lyricon.xinghe.inbox"
         const val METHOD_DELIVER = "deliver"

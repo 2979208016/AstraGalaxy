@@ -18,12 +18,16 @@ class LinkOpenActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val url = intent?.dataString
-        if (url.isNullOrBlank()) {
+        val uri = intent?.data
+        val url = uri?.toString()
+        val scheme = uri?.scheme?.lowercase()
+        // 只接受有效的 http/https 链接，拒绝任意地址及其他 scheme
+        if (url.isNullOrBlank() || (scheme != "http" && scheme != "https") || uri?.host.isNullOrBlank()) {
+            Log.w(TAG, "Rejected invalid or non-http/https url")
             finish()
             return
         }
-        Log.i(TAG, "opening $url")
+        Log.i(TAG, "Opening link in browser")
         openInBrowser(url)
         finish()
     }

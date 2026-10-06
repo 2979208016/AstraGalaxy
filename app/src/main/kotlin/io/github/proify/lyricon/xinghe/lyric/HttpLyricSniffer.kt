@@ -59,6 +59,11 @@ internal class HttpLyricSniffer(
         Thread(runnable, "xinghe-net-lyric").apply { isDaemon = true }
     }
 
+    private fun isLyricEnabled(): Boolean = runCatching {
+        val prefs = module.getRemotePreferences(PREFS)
+        prefs.getBoolean(KEY_ENABLED, true) && prefs.getBoolean(KEY_LYRIC_ENABLED, true)
+    }.getOrDefault(true)
+
     fun install() {
         val bodyClass = runCatching {
             Class.forName("okhttp3.ResponseBody", false, classLoader)
@@ -105,10 +110,12 @@ internal class HttpLyricSniffer(
             module.hook(newCall)
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept { chain ->
-                    runCatching {
-                        val url = urlMethod.invoke(chain.args.getOrNull(0))?.toString().orEmpty()
-                        if (url.isNotEmpty() && looksLikeLyricUrl(url)) {
-                            logger.info("歌词相关请求：$url")
+                    if (isLyricEnabled()) {
+                        runCatching {
+                            val url = urlMethod.invoke(chain.args.getOrNull(0))?.toString().orEmpty()
+                            if (url.isNotEmpty() && looksLikeLyricUrl(url)) {
+                                logger.info("歌词相关请求已拦截")
+                            }
                         }
                     }
                     chain.proceed()
@@ -145,6 +152,7 @@ internal class HttpLyricSniffer(
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept { chain ->
                     val result = chain.proceed()
+                    if (!isLyricEnabled()) return@intercept result
                     runCatching {
                         val response = chain.thisObject
                         val url = if (requestMethod != null && urlMethod != null) {
@@ -201,7 +209,7 @@ internal class HttpLyricSniffer(
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept { chain ->
                     val stream = chain.proceed() as? java.io.InputStream
-                    if (stream == null) stream else KuwoStreamTee(stream) { dispatch(it) }
+                    if (!isLyricEnabled() || stream == null) stream else KuwoStreamTee(stream) { dispatch(it) }
                 }
             logger.info("网络歌词嗅探已挂载：okhttp3.ResponseBody#byteStream")
         } catch (throwable: Throwable) {
@@ -220,6 +228,7 @@ internal class HttpLyricSniffer(
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept { chain ->
                     val result = chain.proceed()
+                    if (!isLyricEnabled()) return@intercept result
                     runCatching {
                         if (bodyUrls[chain.thisObject] != null) {
                             val size = (result as? ByteArray)?.size ?: (result as? String)?.length ?: -1
@@ -376,6 +385,9 @@ internal class HttpLyricSniffer(
     }
 
     private companion object {
+        private const val PREFS = "xinghe_settings"
+        private const val KEY_ENABLED = "module_enabled"
+        private const val KEY_LYRIC_ENABLED = "cap_lyric_enabled"
         private val LRC_LIKE = Regex("""\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?]""")
         private val QRC_LIKE = Regex("""\[\d{2,7},\d{2,7}]""")
 

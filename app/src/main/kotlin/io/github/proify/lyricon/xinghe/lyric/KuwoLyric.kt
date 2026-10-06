@@ -1,6 +1,8 @@
 package io.github.proify.lyricon.xinghe.lyric
 
 import android.util.Base64
+import io.github.proify.lyricon.lyric.model.LyricWord
+import io.github.proify.lyricon.lyric.model.RichLyricLine
 import java.io.ByteArrayOutputStream
 import java.util.zip.Inflater
 
@@ -29,6 +31,24 @@ internal object KuwoLyric {
         if (isGzip(bytes)) return true
         val head = String(bytes, 0, minOf(bytes.size, 32), Charsets.ISO_8859_1)
         return head.contains("TP=content") || head.contains("lrcx=")
+    }
+
+    fun isZlib(bytes: ByteArray): Boolean =
+        bytes.size >= 2 && bytes[0] == 0x78.toByte() &&
+            (bytes[1] == 0x01.toByte() || bytes[1] == 0x5e.toByte() ||
+                bytes[1] == 0x9c.toByte() || bytes[1] == 0xda.toByte())
+
+    /**
+     * 酷我本地歌词缓存 dat（files/KuwoMusic/data/LYRICS_CACHE 下的 .dat 文件）：
+     * zlib(base64(XOR(yeelion, LRCX 文本)))，没有 TP=content 头。
+     * 这里直接按实测管线解，解出来必须像 LRCX（带时间轴或 kuwo/ti 标签）。
+     */
+    fun decodeDat(bytes: ByteArray): String? {
+        val inflated = inflateZlib(bytes) ?: return null
+        val b64 = String(inflated, Charsets.ISO_8859_1).trim()
+        val raw = base64Decode(b64) ?: return null
+        val text = xor(raw)
+        return if (plausible(text)) text else null
     }
 
     fun isGzip(bytes: ByteArray): Boolean =
@@ -142,4 +162,95 @@ internal object KuwoLyric {
         val result = out.toByteArray()
         return if (result.isEmpty()) null else result
     }
+
+    // ---------------- 进程内直取（钩子的返回值 / 兜底逐字） ----------------
+
+    /**
+     * 酷我 KDTX 解析器（fh.g.a(byte[], int)）的返回值 → LocalLyric。
+     *
+     * 词幕同款反射路径：结果对象 `d()` 给行列表；行对象
+     * `a()`=文本 / `d()`=行起点(ms) / `e()`=词列表；词对象
+     * `a()`=文本 / `e()`=词起点(ms) / `c()`=词时长(ms) —— 精确逐字。
+     * 版本变了方法名对不上就直接返回 null，不碍事。
+     */
+    fun parseKdtxObject(result: Any): LocalLyric? {
+        val rawLines = runCatching {
+            result.javaClass.getMethod("d").invoke(result) as? List<*>
+        }.getOrNull() ?: return null
+        if (rawLines.isEmpty()) return null
+
+        val lines = ArrayList<RichLyricLine>(rawLines.size)
+        for (raw in rawLines) {
+            raw ?: continue
+            val text = callString(raw, "a") ?: continue
+            val begin = callLong(raw, "d") ?: 0L
+            val words = ArrayList<LyricWord>()
+            val rawWords = runCatching {
+                raw.javaClass.getMethod("e").invoke(raw) as? List<*>
+            }.getOrNull()
+            if (rawWords != null) {
+                for (w in rawWords) {
+                    w ?: continue
+                    val wText = callString(w, "a") ?: continue
+                    val wBegin = callLong(w, "e") ?: begin
+                    val wDur = callInt(w, "c")?.toLong()?.coerceAtLeast(0L) ?: 0L
+                    words.add(
+                        LyricWord(
+                            begin = wBegin,
+                            end = wBegin + wDur,
+                            duration = wDur,
+                            text = wText
+                        )
+                    )
+                }
+            }
+            val end = words.lastOrNull()?.end ?: (begin + 5_000L)
+            lines.add(
+                RichLyricLine(
+                    begin = begin,
+                    end = end,
+                    text = text,
+                    words = words.ifEmpty { null }
+                ).apply { duration = end - begin }
+            )
+        }
+        if (lines.isEmpty()) return null
+        return LocalLyric(lines = lines.sortedBy { it.begin })
+    }
+
+    /**
+     * 纯行级 LRC 的逐字兜底：把行文本按字数均摊到整行时长上。
+     * 比没有逐字好看，精度肯定不如 KDTX / LRCX 的真逐字。
+     */
+    fun synthesizeWords(line: RichLyricLine): List<LyricWord> {
+        val text = line.text ?: return emptyList()
+        if (text.isBlank()) return emptyList()
+        val chars = text.toCharArray()
+        val begin = line.begin
+        val end = if (line.end > line.begin) line.end else line.begin + 5_000L
+        val step = (end - begin) / chars.size.toLong().coerceAtLeast(1L)
+        if (step <= 0L) return emptyList()
+        return chars.mapIndexed { i, c ->
+            val wBegin = begin + i * step
+            val wEnd = if (i == chars.size - 1) end else wBegin + step
+            LyricWord(
+                begin = wBegin,
+                end = wEnd,
+                duration = (wEnd - wBegin).coerceAtLeast(0L),
+                text = c.toString()
+            )
+        }
+    }
+
+    private fun callString(obj: Any, name: String): String? = runCatching {
+        obj.javaClass.getMethod(name).invoke(obj) as? String
+    }.getOrNull()
+
+    private fun callLong(obj: Any, name: String): Long? = runCatching {
+        obj.javaClass.getMethod(name).invoke(obj) as? Long
+    }.getOrNull()
+
+    private fun callInt(obj: Any, name: String): Int? = runCatching {
+        obj.javaClass.getMethod(name).invoke(obj) as? Int
+    }.getOrNull()
 }

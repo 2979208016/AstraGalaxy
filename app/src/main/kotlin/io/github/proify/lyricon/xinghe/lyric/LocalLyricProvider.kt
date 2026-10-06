@@ -1,5 +1,6 @@
 package io.github.proify.lyricon.xinghe.lyric
 
+import io.github.proify.lyricon.xinghe.settings.ModulePrefs
 import android.app.Application
 import android.app.Instrumentation
 import android.media.MediaMetadata
@@ -172,6 +173,12 @@ internal class LocalLyricProvider(
      * 否则 MediaSession 里永远没有歌名。这里只把两个查询方法改成恒为 true，
      * 不连接、不开启任何真实设备，对播放器本身没有副作用。
      */
+    private fun isLyricEnabled(): Boolean = runCatching {
+        val prefs = module.getRemotePreferences(ModulePrefs.NAME)
+        prefs.getBoolean(ModulePrefs.KEY_ENABLED, true) &&
+            prefs.getBoolean(ModulePrefs.KEY_LYRIC, true)
+    }.getOrDefault(true)
+
     private fun installBluetoothBoost() {
         if (hostPackage !in Constants.BLUETOOTH_BOOST_PACKAGES) return
         val targets = listOf(
@@ -182,7 +189,9 @@ internal class LocalLyricProvider(
             try {
                 val clazz = Class.forName(className, false, classLoader)
                 val method = clazz.getDeclaredMethod(methodName)
-                module.hook(method).intercept { true }
+                module.hook(method).intercept { chain ->
+                    if (isLyricEnabled()) true else chain.proceed()
+                }
                 logger.info("蓝牙输出伪装已挂载：$className#$methodName")
             } catch (throwable: Throwable) {
                 logger.warn("蓝牙输出伪装失败：$className#$methodName（${throwable.message}）")
@@ -226,6 +235,7 @@ internal class LocalLyricProvider(
                 }
                 provider = created
                 logger.info("Provider registered: player=$hostPackage, process=$processName")
+                ModuleHeartbeat.report(context, module, logger)
                 created
             } catch (throwable: Throwable) {
                 logger.error("Provider registration failed in $processName", throwable)
@@ -269,17 +279,71 @@ internal class LocalLyricProvider(
     /** React Native 播放器（洛雪这类）：歌词模块 + JS 桥出口 */
     private fun installRnBridge() {
         runCatching {
-            RnLyricBridge(module, logger, classLoader) { lyric, source -> onNetworkLyric(lyric, source) }.install()
+            RnLyricBridge(
+                module, logger, classLoader,
+                // 只有洛雪才接播放事件：LyricModule 是它特有的类，
+                // 其它 RN 播放器传 null，钩子挂上了也是空转。
+                lxPlayback = if (hostPackage == Constants.LX_PACKAGE) lxPlaybackSink else null
+            ) { lyric, source -> onNetworkLyric(lyric, source) }.install()
         }.onFailure { logger.error("RN 歌词嗅探挂载失败", it) }
+    }
+
+    /**
+     * 洛雪 LyricModule 的播放事件 → 进度锚点。
+     *
+     * 词幕同款思路：洛雪的 MediaSession 经常不带准确 position，但 LyricModule
+     * 的 play(position)/pause()/setPlaybackRate 是毫秒级精确值 —— 直接用来
+     * 起锚，比 MediaSession 通道准得多；toggleTranslation/toggleRoma 则把
+     * 它界面上的「显示译词 / 音译」开关原样同步给星流。
+     */
+    private val lxPlaybackSink = object : RnLyricBridge.LxPlayback {
+
+        override fun onPlay(positionMs: Long) {
+            anchorPosition = positionMs
+            anchorRealtime = SystemClock.elapsedRealtime()
+            anchorPlaying = true
+            hasAnchor = true
+            provider?.let { p ->
+                runCatching { p.player.setPlaybackState(true) }
+                runCatching { p.player.setPosition(positionMs) }
+                lastPushedPlaying = true
+            }
+            startProgressTicker()
+        }
+
+        override fun onPause() {
+            // 先按推算值收锚，再停走 —— 暂停后进度要冻在最后位置
+            anchorPosition = extrapolatedPosition()
+            anchorRealtime = SystemClock.elapsedRealtime()
+            anchorPlaying = false
+            provider?.let { p ->
+                runCatching { p.player.setPlaybackState(false) }
+                runCatching { p.player.setPosition(anchorPosition) }
+                lastPushedPlaying = false
+            }
+        }
+
+        override fun onRate(rate: Float) {
+            if (rate <= 0f || rate == playbackSpeed) return
+            // 倍速变了先按旧倍速收锚，再换倍速，进度保持连续
+            anchorPosition = extrapolatedPosition()
+            anchorRealtime = SystemClock.elapsedRealtime()
+            playbackSpeed = rate
+        }
+
+        override fun onDisplayTranslation(display: Boolean) {
+            provider?.let { runCatching { it.player.setDisplayTranslation(display) } }
+        }
+
+        override fun onDisplayRoma(display: Boolean) {
+            provider?.let { runCatching { it.player.setDisplayRoma(display) } }
+        }
     }
 
     private fun onNetworkLyric(lyric: LocalLyric, source: String, trustedBySource: Boolean = false) {
         val sniffedAt = SystemClock.elapsedRealtime()
         pendingLyric = Triple(lyric, source, sniffedAt)
         val signature = currentSignature ?: return
-        val trusted = trustedBySource || hasTrustworthyIdentity(lyric)
-        // 已经出过词、新来的又没有更强证据（自带歌名）→ 不打扰
-        if (lyricFound && !trusted) return
         val parts = signature.split('|')
         val title = parts.getOrNull(0).orEmpty()
         if (title.isBlank()) return
@@ -287,7 +351,24 @@ internal class LocalLyricProvider(
         val duration = metadataDurationMs
         val mediaId = parts.getOrNull(2)?.takeIf { it.isNotBlank() && it != "null" }
             ?: currentMediaId
+        var trusted = trustedBySource || hasTrustworthyIdentity(lyric)
+        // 网易云歌词 JSON 自带 musicId：与当前 mediaId 一致即最强证据，
+        // 必须允许它覆盖之前误推的上一首歌词（否则错误歌词被 lyricFound 锁死）
+        if (!trusted && hostPackage == "com.netease.cloudmusic" &&
+            mediaId != null && lyric.id != null &&
+            LocalLyricFinder.normalize(lyric.id) == LocalLyricFinder.normalize(mediaId)
+        ) trusted = true
+        // 已经出过词、新来的又没有更强证据（自带歌名/歌曲 id）→ 不打扰；
+        // 网易云例外：带身份证明的新歌词允许覆盖（修正「切歌后一直显示上一首歌词」）
+        if (lyricFound && !trusted) return
+        if (lyricFound && !(hostPackage == "com.netease.cloudmusic" && trusted)) return
         logger.info("[$source] 嗅到歌词：${lyric.lines.size} 行，标题=<${lyric.title ?: lyric.firstLine}>")
+        // 网易云：音频还没切过来的待定期间，无歌名/无 id 的歌词身份存疑，
+        // 暂存后会被原样提交成新歌歌词 → 直接丢（等下一波带 musicId 的）
+        if (hostPackage == "com.netease.cloudmusic" && pendingSwitchAt != 0L && !trusted) {
+            logger.info("[netease] 待定期间丢弃无身份证明的歌词")
+            return
+        }
         val mustVerify = !trustedBySource ||
             hostPackage == "cn.kuwo.player" || hostPackage == "com.netease.cloudmusic"
         if (mustVerify && !belongsToCurrentSong(lyric, sniffedAt, title, artist, duration, mediaId)) {
@@ -299,7 +380,8 @@ internal class LocalLyricProvider(
             // 同一首歌只推第一份（原文）。播放器随后请求的「翻译版 lrc / 翻译接口」时间戳和
             // 原曲一致、只是文字变了，绝不能拿它替换正文（用户反馈「中文歌突然变英文歌词」）。
             // 译文要显示与否交给星流自己的翻译开关。
-            if (lyricFound) return@post
+            // 网易云例外：带 musicId 身份证明的新歌词允许覆盖，用于纠正误推的上一首
+            if (lyricFound && !(hostPackage == "com.netease.cloudmusic" && trusted)) return@post
             everPublished = true
             publish(title, artist, duration, mediaId, lyric.lines, source, lyric.title)
         }
@@ -346,7 +428,11 @@ internal class LocalLyricProvider(
         val lastLine = lyric.lines.lastOrNull()?.begin ?: 0L
         if (durationMs > 0L && lastLine > 0L) {
             val diff = if (lastLine > durationMs) lastLine - durationMs else durationMs - lastLine
-            if (diff <= 8_000L) return true
+            // 网易云：无标题歌词只靠时长吻合最容易把上一首认成新歌，
+            // 必须同时是切歌之后才嗅到的
+            if (diff <= 8_000L &&
+                (hostPackage != "com.netease.cloudmusic" || sniffedAt >= songSwitchAt)
+            ) return true
             // 时长明显不吻合：酷我/酷狗 会提前把下一首的歌词发过来，
             // 这种歌词的首行往往就是那首歌的歌名，对不上就绝不能推给当前歌曲。
             val guess = lyric.firstLine?.trim().orEmpty()
@@ -360,7 +446,12 @@ internal class LocalLyricProvider(
                 }
             }
         }
-        return sniffedAt >= songSwitchAt - SWITCH_GRACE_MS
+        // 网易云切歌瞬间会把「上一首的在途歌词响应」在切歌后才送达，
+        // 用统一的 1.5s 余量就会把它认成新歌词（用户反馈「网易云歌词对不上」）。
+        // 这里对它收紧：切歌待定期间只接受切歌点之后才嗅到的；
+        // 其它播放器维持原窗口（先拉歌词、后报元数据是常态）。
+        val grace = if (hostPackage == "com.netease.cloudmusic") 0L else SWITCH_GRACE_MS
+        return sniffedAt >= songSwitchAt - grace
     }
 
     // ---------------- MediaSession ----------------
@@ -670,6 +761,14 @@ internal class LocalLyricProvider(
             anchorPosition = accepted
             anchorRealtime = SystemClock.elapsedRealtime()
             hasAnchor = true
+        }
+        // 酷狗系很少上报 position：首次播放可能一直没有锚点，
+        // 进度永远停在 0，歌词卡在第一句。首个播放态回调先起锚。
+        if (!hasAnchor && playing && hostPackage.startsWith("com.kugou")) {
+            anchorPosition = position.coerceAtLeast(0L)
+            anchorRealtime = SystemClock.elapsedRealtime()
+            hasAnchor = true
+            logger.info("酷狗无锚点首播起锚：pos=" + anchorPosition)
         }
         anchorPlaying = playing
         playbackSpeed = speed
@@ -1106,6 +1205,7 @@ internal class LocalLyricProvider(
                     // 同 XingHeLyricProvider：完整堆栈落盘，别指望 logcat -b crash。
                     try {
                         val result = chain.proceed()
+                        if (!isLyricEnabled()) return@intercept result
                         try {
                             callback(chain, result)
                         } catch (t: Throwable) {

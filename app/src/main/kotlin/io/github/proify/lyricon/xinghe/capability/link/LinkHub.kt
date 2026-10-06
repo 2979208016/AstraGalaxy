@@ -11,7 +11,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import com.astraisland.client.IslandClient
 import com.astraisland.protocol.ActivityBundle
 import io.github.proify.lyricon.xinghe.settings.ModulePrefs
 import java.util.concurrent.CountDownLatch
@@ -61,7 +60,7 @@ object LinkHub {
     }
     private val main = Handler(Looper.getMainLooper())
 
-    @Volatile private var client: IslandClient? = null
+    @Volatile private var client: IslandV7Client? = null
     @Volatile private var appContext: Context? = null
 
     /** 暂存的待投链接（URL），供重连后补投 */
@@ -85,7 +84,6 @@ object LinkHub {
         pendingUrl = url
         pendingAt = System.currentTimeMillis()
         retryIndex = 0
-        persistPending(url)
 
         val latch = CountDownLatch(1)
         val result = AtomicInteger(-1)
@@ -120,13 +118,13 @@ object LinkHub {
 
     // ---------------- 内部实现 ----------------
 
-    /** 建 IslandClient（只在 App 进程，幂等） */
-    private fun ensureClient(): IslandClient? {
+    /** 建岛客户端（只在 App 进程，幂等；协议 v7，见 [IslandV7Client]） */
+    private fun ensureClient(): IslandV7Client? {
         client?.let { return it }
         val ctx = appContext ?: return null
         return synchronized(this) {
             client ?: runCatching {
-                IslandClient(ctx) { activityId, actionId ->
+                IslandV7Client(ctx) { activityId, actionId ->
                     onAction(activityId, actionId)
                 }.apply {
                     onReadyChanged = { ready ->
@@ -135,7 +133,7 @@ object LinkHub {
                     }
                     connect()
                 }
-            }.onFailure { Log.e(TAG, "IslandClient create failed", it) }
+            }.onFailure { Log.e(TAG, "IslandV7Client create failed", it) }
                 .getOrNull()
                 .also { client = it }
         }
@@ -156,13 +154,12 @@ object LinkHub {
         val result = runCatching { island.start(encodeCard(url)) }
             .onFailure { Log.e(TAG, "start failed", it) }
             .getOrDefault(-1)
-        Log.i(TAG, "start result=$result url=$url")
+        Log.i(TAG, "start result=$result")
         when (result) {
             0 -> {                      // RESULT_OK
                 currentUrl = url
                 pendingUrl = null
                 retryIndex = 0
-                clearPending()
             }
             9 -> {                      // RESULT_NOT_CONNECTED：会话断了，重连后重投
                 runCatching { island.connect() }
@@ -178,7 +175,7 @@ object LinkHub {
 
     private fun scheduleRetry(url: String) {
         if (retryIndex >= RETRY_DELAYS_MS.size) {
-            Log.w(TAG, "放弃投递 $url（重试${retryIndex}次仍未连上）")
+            Log.w(TAG, "放弃投递链接（重试${retryIndex}次仍未连上）")
             retryIndex = 0
             return
         }
@@ -189,40 +186,14 @@ object LinkHub {
         }
     }
 
-    /** 岛就绪回调触发时补投暂存的链接 */
+    /** 岛就绪回调触发时补投暂存的链接（纯内存处理，不写本地存储） */
     private fun flushPending() {
-        val url = pendingUrl ?: run {
-            // 内存里没有就尝试从落盘的偏好里捞（进程被杀过的情况）
-            val ctx = appContext ?: return
-            val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val stored = prefs.getString(KEY_URL, null) ?: return
-            val at = prefs.getLong(KEY_AT, 0L)
-            if (System.currentTimeMillis() - at > STALE_MS) {
-                prefs.edit().remove(KEY_URL).remove(KEY_AT).apply()
-                return
-            }
-            stored
+        val url = pendingUrl ?: return
+        if (System.currentTimeMillis() - pendingAt > STALE_MS) {
+            pendingUrl = null
+            return
         }
         worker.execute { tryShow(url) }
-    }
-
-    /** 链接落盘：进程被杀也能补 */
-    private fun persistPending(url: String) {
-        val ctx = appContext ?: return
-        runCatching {
-            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putString(KEY_URL, url)
-                .putLong(KEY_AT, System.currentTimeMillis())
-                .apply()
-        }
-    }
-
-    private fun clearPending() {
-        val ctx = appContext ?: return
-        runCatching {
-            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .remove(KEY_URL).remove(KEY_AT).apply()
-        }
     }
 
     private fun onAction(activityId: String, actionId: String) {
@@ -230,6 +201,13 @@ object LinkHub {
         when (actionId) {
             ACTION_OPEN -> {
                 val url = currentUrl ?: return
+                val uri = runCatching { Uri.parse(url) }.getOrNull()
+                val scheme = uri?.scheme?.lowercase()
+                if (scheme != "http" && scheme != "https") {
+                    Log.w(TAG, "Rejected non-http/https URL in onAction")
+                    dismiss()
+                    return
+                }
                 // 按钮回调：进程被墓碑冻住时这步进不来。走中转页，
                 // 起不来就用通知兜底（通知 PendingIntent 由 systemui 发出，
                 // 不受墓碑影响）。
@@ -343,11 +321,9 @@ object LinkHub {
                 .setAutoCancel(true)
                 .build()
             nm.notify(NOTIF_ID, n)
-            Log.i(TAG, "fallback notification posted for $url")
+            Log.i(TAG, "fallback notification posted")
         }.onFailure { Log.w(TAG, "postFallbackNotification failed: ${it.message}") }
     }
 
-    private const val PREFS = "xinghe_link_pending"
-    private const val KEY_URL = "url"
-    private const val KEY_AT = "at"
+
 }

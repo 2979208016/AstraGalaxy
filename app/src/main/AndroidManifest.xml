@@ -4,8 +4,12 @@
     <!-- 仅用于「打开 GitHub 项目主页」这类显式跳转；模块本体不联网 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- 向星河岛投送内容项。权限由星流（宿主）定义，普通级别，不弹授权框。 -->
+    <!-- 向星河岛投送内容项。权限由星流（宿主）定义，普通级别，不弹授权框。
+         新版岛校验的是 com.astraflow.tool.island.* 这组名（岛侧对 source 包名
+         逐个 checkPermission），三个名字都声明上，正式包 / 调试包 / 旧版都覆盖。 -->
     <uses-permission android:name="com.astraisland.permission.PUBLISH_ACTIVITY" />
+    <uses-permission android:name="com.astraflow.tool.island.permission.PUBLISH_ACTIVITY" />
+    <uses-permission android:name="com.astraflow.tool.debug.island.permission.PUBLISH_ACTIVITY" />
 
     <queries>
         <package android:name="org.lsposed.manager" />
@@ -82,10 +86,10 @@
             android:parentActivityName=".ui.page.HomeActivity"
             android:theme="@style/Theme.LyricProvider.Detail" />
 
-        <!-- 打开链接的中转页（透明、瞬间 finish） -->
+        <!-- 打开链接的中转页（透明、瞬间 finish，不向外部开放） -->
         <activity
             android:name=".capability.link.LinkOpenActivity"
-            android:exported="true"
+            android:exported="false"
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:theme="@style/Theme.LyricProvider.Transparent" />

@@ -35,6 +35,12 @@ class LinkInboxProvider : ContentProvider() {
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
         val ctx = context ?: return Bundle.EMPTY
+        val callingUid = android.os.Binder.getCallingUid()
+        val myUid = android.os.Process.myUid()
+        if (callingUid != android.os.Process.SYSTEM_UID && callingUid != myUid) {
+            Log.w(TAG, "Unauthorized call rejected: callingUid=$callingUid")
+            return Bundle.EMPTY
+        }
         return when (method) {
             METHOD_DELIVER -> onDeliver(ctx.applicationContext, arg)
             METHOD_HELLO -> onHello(ctx.applicationContext, extras)
@@ -53,13 +59,23 @@ class LinkInboxProvider : ContentProvider() {
 
     /** 收链接：开关判断 + 同步等待 LinkHub 投送完成 */
     private fun onDeliver(app: Context, url: String?): Bundle {
-        val link = url?.takeIf { it.isNotBlank() } ?: return Bundle.EMPTY
+        val link = url?.trim()?.takeIf { it.isNotBlank() } ?: return Bundle.EMPTY
+        val uri = runCatching { Uri.parse(link) }.getOrNull()
+        val scheme = uri?.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") {
+            Log.w(TAG, "Rejected non-http/https link: scheme=$scheme")
+            return Bundle.EMPTY
+        }
+        if (uri?.host.isNullOrBlank()) {
+            Log.w(TAG, "Rejected link with empty host")
+            return Bundle.EMPTY
+        }
         val prefs = ModulePrefs.of(app)
         if (!ModulePrefs.isEnabled(prefs) || !ModulePrefs.isLinkEnabled(prefs)) {
             Log.i(TAG, "链接助手已关闭，忽略投递")
             return Bundle.EMPTY
         }
-        Log.i(TAG, "Link received: $link")
+        Log.i(TAG, "Link received")
         val ok = LinkHub.postBlocking(app, link, AWAIT_MS)
         return Bundle().apply { putInt(RESULT_CODE, if (ok) 0 else -1) }
     }

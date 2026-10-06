@@ -28,7 +28,10 @@ public class LocalLyric(
     val firstLine: String? = null
 )
 
-public enum class LyricFormat { KRC, QRC, LRC, NETEASE, LRCX }
+public enum class LyricFormat { KRC, QRC, LRC, NETEASE, LRCX,
+
+    /** 酷我 LYRICS_CACHE：zlib(base64(XOR(yeelion)))，见 [KuwoLyric.decodeDat] */
+    KUWO_DAT }
 
 public enum class BaseDir { EXTERNAL_FILES, EXTERNAL_CACHE, FILES, CACHE }
 
@@ -241,16 +244,19 @@ internal object LyricParsers {
 
     fun parseNetease(text: String): LocalLyric? {
         val obj = runCatching { JSONObject(text) }.getOrNull() ?: return null
-        val lrc = obj.optString("lrc").takeIf { it.isNotBlank() }
-        val yrc = obj.optString("yrc").takeIf { it.isNotBlank() }
+        // 网易云的歌词字段不止顶层：有的版本 / 接口把歌词再嵌一层
+        //（{"lrc":{"lyric":...}}、{"data":{"lrc":...}}），还有把 JSON 字符串
+        // 再 JSON 编码塞进字段的写法。逐层展开取到字符串为止。
+        val lrc = deepLyricString(obj, "lrc")
+        val yrc = deepLyricString(obj, "yrc")
         if (lrc == null && yrc == null) return null
 
-        val id = obj.optString("musicId").takeIf { it.isNotBlank() && it != "0" }
+        val id = deepLyricString(obj, "musicId")?.takeIf { it != "0" }
 
         // 翻译：新旧字段名都认
         val translation = HashMap<Long, String>()
         for (key in arrayOf("lrcTranslateLyric", "tlyric", "translation", "yrcTranslate")) {
-            obj.optString(key).takeIf { it.isNotBlank() }?.let { raw ->
+            deepLyricString(obj, key)?.let { raw ->
                 for ((t, s) in parseNeteaseLines(raw)) translation[t] = s
             }
         }
@@ -258,7 +264,7 @@ internal object LyricParsers {
         // 音译（罗马音）
         val roma = HashMap<Long, String>()
         for (key in arrayOf("romalrc", "roma", "romaLyric")) {
-            obj.optString(key).takeIf { it.isNotBlank() }?.let { raw ->
+            deepLyricString(obj, key)?.let { raw ->
                 for ((t, s) in parseNeteaseLines(raw)) roma[t] = s
             }
         }
@@ -280,6 +286,35 @@ internal object LyricParsers {
             line
         }
         return LocalLyric(lines, null, null, id, lines.firstOrNull()?.text)
+    }
+
+    /**
+     * 从 JSON 里挖「歌词字段」：值可能是 String、嵌套 JSONObject（{"lrc":{"lyric":...}}）、
+     * 或者把 JSON 字符串再编码一遍（"lrc":"{\"lyric\":\"...\"}"）。
+     * 只认 String / JSONObject / 数字，最多下钻 3 层防止恶意递归。
+     */
+    private fun deepLyricString(obj: JSONObject, key: String, depth: Int = 0): String? {
+        if (depth > 3) return null
+        val v = obj.opt(key) ?: return null
+        return when (v) {
+            is String -> {
+                val s = v.trim()
+                if (s.isEmpty() || s == "null") null
+                else if (s.startsWith("{") && s.endsWith("}")) {
+                    // JSON 字符串再嵌套：解开一层再挖同名字段
+                    runCatching { JSONObject(s) }.getOrNull()?.let { nested ->
+                        deepLyricString(nested, key, depth + 1)
+                            ?: deepLyricString(nested, "lyric", depth + 1)
+                    } ?: s
+                } else s
+            }
+            is JSONObject -> deepLyricString(v, "lyric", depth + 1)
+                ?: deepLyricString(v, "lrc", depth + 1)
+                ?: deepLyricString(v, "yrc", depth + 1)
+                ?: deepLyricString(v, "musicId", depth + 1)
+            is Number -> v.toString()
+            else -> null
+        }
     }
 
     /**
@@ -460,7 +495,19 @@ internal object LyricParsers {
             line.end = end
             line.duration = end - line.begin
         }
-        return LocalLyric(sorted, null, null, null, title ?: artist ?: sorted.firstOrNull()?.text)
+        return LocalLyric(
+            lines = sorted,
+            title = title,
+            artist = artist,
+            id = null,
+            firstLine = title ?: artist ?: sorted.firstOrNull()?.text
+        )
+    }
+
+    /** 酷我本地缓存 dat → LRCX → LocalLyric（[ti:] 可能为空，兜底用 firstLine） */
+    fun parseKuwoDat(bytes: ByteArray): LocalLyric? {
+        val text = KuwoLyric.decodeDat(bytes) ?: return null
+        return parseKuwoLrcx(text)
     }
 
     private fun trimmedText(text: String): String = text.trim()
@@ -683,6 +730,15 @@ internal object LocalLyricFinder {
     /** 兜底：允许缓存比本首歌开始时间早多久（写入耗时） */
     private const val WRITE_GRACE_MS = 2_000L
 
+    // 酷我专属：时长容差收紧 —— hash 文件名 + [ti:] 经常为空，
+    // 唯一硬证据就是时长；8s 对流行歌太宽，会把别的歌认进来
+    private const val KUWO_DURATION_TOLERANCE_MS = 3_000L
+
+    // 酷我专属：缓存写入距切歌点的窗口（酷我会提前下载下一首，
+    // mtime 可比切歌早 30s；过期的老缓存不算）
+    private const val KUWO_WRITE_BEFORE_MS = 30_000L
+    private const val KUWO_WRITE_AFTER_MS = 120_000L
+
     private val HASH_SUFFIX = Regex("""-[0-9a-fA-F]{16,}$|-(\d{5,})$""")
 
     /** 私有目录扫描的深度与规模上限 */
@@ -785,11 +841,22 @@ internal object LocalLyricFinder {
         var verifiedDiff = Long.MAX_VALUE
         var fresh: Pair<File, LocalLyric>? = null
         var freshDiff = Long.MAX_VALUE
+        // 酷我（KUWO_DAT）：hash 文件名 + 可能无 [ti:] → 只能信时长 + 写入时间双验证
+        val kuwoMode = recipe.sources.any { it.format == LyricFormat.KUWO_DAT }
+        val durationTolerance = if (kuwoMode) KUWO_DURATION_TOLERANCE_MS else DURATION_TOLERANCE_MS
         if (durationMs > 0L) {
             for ((file, lyric) in parsed) {
                 val last = lyric.lines.lastOrNull()?.begin ?: continue
                 val diff = abs(last - durationMs)
-                if (diff > DURATION_TOLERANCE_MS) continue
+                if (diff > durationTolerance) continue
+                if (kuwoMode) {
+                    // 酷我缓存窗口：可稍早于切歌（预下载），不可晚太多或太老
+                    val writtenAt = file.lastModified()
+                    if (startedAt > 0L &&
+                        (writtenAt < startedAt - KUWO_WRITE_BEFORE_MS ||
+                            writtenAt > startedAt + KUWO_WRITE_AFTER_MS)
+                    ) continue
+                }
                 if (identityConflicts(lyric, wantCore, wantArtist, mid)) {
                     log("排除 " + file.name + "：歌词自带身份与当前歌曲不符")
                     continue
@@ -804,12 +871,17 @@ internal object LocalLyricFinder {
                 // 文件名就是本曲 id（网易云的 LrcCache）：最硬的证据
                 val namedById = mid.isNotEmpty() &&
                     normalize(file.name.substringBeforeLast('.')) == mid
+                // 网易云有时不发 mediaId（或发的是另一套 id）：
+                // 此时 namedById=false，若再禁 recentlyWritten 就完全推不出词
+                //（用户反馈「网易云有时不推歌词」）。mediaId 缺失时对 idNamed 平台
+                // 放宽「本次播放期间新写入」；mediaId 存在时维持原判据。
+                val idNamedOk = !idNamed || mid.isEmpty()
                 if (evidence == true) {
                     if (diff < verifiedDiff) {
                         verifiedDiff = diff
                         verified = file to lyric
                     }
-                } else if (namedById || (recentlyWritten && !idNamed)) {
+                } else if (namedById || (recentlyWritten && idNamedOk)) {
                     if (diff < freshDiff) {
                         freshDiff = diff
                         fresh = file to lyric
@@ -879,7 +951,21 @@ internal object LocalLyricFinder {
         var bestScore = Int.MIN_VALUE
         var best: LocalLyric? = null
         var scanned = 0
-        for (root in roots) {
+        // 酷我的歌词固定落在 KuwoMusic/data/LYRICS_CACHE，其它目录
+        //（.fresco 图片缓存、广告 dat 等）动辄几千个文件，先把 400 个名额
+        // 吃光就走不到真正含歌词的目录。这里按「名字像歌词缓存的目录」排前，
+        // 保证 LYRICS_CACHE / lyric / lrc 目录最先被扫。
+        val ordered = roots.sortedByDescending { root ->
+            var hit = 0
+            runCatching {
+                root.listFiles()?.forEach { child ->
+                    val n = child.name.lowercase()
+                    if (n.contains("lyric") || n.contains("lrc")) hit++
+                }
+            }
+            hit
+        }
+        for (root in ordered) {
             walkLyricFiles(root, 0) { file ->
                 if (scanned >= MAX_SWEEP_FILES) return@walkLyricFiles
                 val format = sweepFormatOf(file) ?: return@walkLyricFiles
@@ -908,7 +994,13 @@ internal object LocalLyricFinder {
     private fun walkLyricFiles(dir: File, depth: Int, visit: (File) -> Unit) {
         if (depth > MAX_SWEEP_DEPTH) return
         val children = runCatching { dir.listFiles() }.getOrNull() ?: return
-        for (child in children) {
+        // 「名字像歌词」的目录先递归（酷我 KuwoMusic/data/LYRICS_CACHE 在第 3 层，
+        // 不排前会被 .fresco 图片缓存先吃光文件名额）
+        val sorted = children.sortedBy { child ->
+            val n = child.name.lowercase()
+            if (child.isDirectory && (n.contains("lyric") || n.contains("lrc"))) 0 else 1
+        }
+        for (child in sorted) {
             if (child.isDirectory) walkLyricFiles(child, depth + 1, visit)
             else if (child.isFile) visit(child)
         }
@@ -922,6 +1014,9 @@ internal object LocalLyricFinder {
             name.endsWith(".lrc") -> LyricFormat.LRC
             name.endsWith(".lrcx") -> LyricFormat.LRCX
             name.endsWith(".alm3ll") -> LyricFormat.LRC
+            // 酷我 LYRICS_CACHE 的 *.dat 与 MOBILEAD/QUKU 等其它 dat 同后缀，
+            // 靠 KUWO_DAT 解析器的「解出来必须像 LRCX」兜底，认不出的自然丢弃
+            name.endsWith(".dat") -> LyricFormat.KUWO_DAT
             else -> null
         }
     }
@@ -1002,6 +1097,16 @@ internal object LocalLyricFinder {
 
         val age = now - file.lastModified()
         if (age <= RECENT_WINDOW_MS) score += 25 else if (age <= 900_000L) score += 8
+        // 酷我 dat：文件名是 hash、[ti:] 常为空，「最近写入 + 时长吻合」是唯一身份证明
+        if (file.name.endsWith(".dat", true)) {
+            if (age <= RECENT_WINDOW_MS) score += 40
+            if (durationMs > 0) {
+                val lastBegin = lyric.lines.lastOrNull()?.begin ?: 0L
+                if (lastBegin > 0 && abs(lastBegin - durationMs) <= KUWO_DURATION_TOLERANCE_MS) {
+                    score += 80
+                }
+            }
+        }
 
         if (durationMs > 0) {
             val diff = abs(lyric.lines.last().begin - durationMs)
@@ -1024,6 +1129,7 @@ internal object LocalLyricFinder {
                     val text = file.readText()
                     LyricParsers.parseKuwoLrcx(text) ?: LyricParsers.parseLrcText(text)
                 }
+                LyricFormat.KUWO_DAT -> LyricParsers.parseKuwoDat(file.readBytes())
             }
         }.getOrNull()
         if (cache.size > 600) cache.clear()
