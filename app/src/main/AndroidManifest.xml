@@ -109,6 +109,7 @@
             android:exported="true"
             android:grantUriPermissions="false" />
 
+
         <!-- ============ LyricON 提供端识别 ============ -->
         <meta-data
             android:name="lyricon_module"

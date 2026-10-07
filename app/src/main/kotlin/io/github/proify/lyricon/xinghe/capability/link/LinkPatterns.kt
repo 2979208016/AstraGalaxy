@@ -67,6 +67,14 @@ object LinkPatterns {
         return null
     }
 
+    private val PATTERN_PHONE = Regex(
+        "(?<![0-9])(?:\\+?86[- ]?)?1[3-9][0-9]{9}(?![0-9])"
+    )
+
+    fun firstPhone(text: CharSequence?): String? =
+        text?.let { PATTERN_PHONE.find(it.take(SCAN_LIMIT))?.value }
+            ?.replace(Regex("[^0-9+]"), "")
+
     /** 文本里有没有链接 */
     fun hasLink(text: CharSequence?): Boolean = firstLink(text) != null
 

@@ -86,7 +86,13 @@ internal class RnLyricBridge(
     // ---------------- 洛雪歌词模块 ----------------
 
     private fun hookLyricModule(): Boolean {
-        val clazz = loadClass("cn.toside.music.mobile.lyric.LyricModule") ?: return false
+        // 词幕聚合版同时适配洛雪主包及两个常见改包；不同改包只改了
+        // LyricModule 的包名，setLyric/play/pause 等接口保持一致。
+        val clazz = listOf(
+            "cn.toside.music.mobile.lyric.LyricModule",
+            "com.lxnetease.music.mobile.lyric.LyricModule",
+            "com.ikunshare.music.mobile.lyric.LyricModule"
+        ).asSequence().mapNotNull(::loadClass).firstOrNull() ?: return false
         var hooked = false
         for (method in clazz.declaredMethods) {
             if (Modifier.isStatic(method.modifiers)) continue

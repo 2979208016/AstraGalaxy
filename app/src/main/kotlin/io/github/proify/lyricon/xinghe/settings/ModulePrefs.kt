@@ -18,6 +18,8 @@ object ModulePrefs {
     const val KEY_HIDE_ICON = "hide_launcher_icon"
     const val KEY_LYRIC = "cap_lyric_enabled"
     const val KEY_LINK = "cap_link_enabled"
+    const val KEY_SMART_ISLAND = "cap_smart_island_enabled"
+    const val KEY_PHONE = "cap_phone_enabled"
     const val KEY_BROWSER_MODE = "link_browser_mode"
     const val KEY_BROWSER_PACKAGE = "link_browser_package"
     const val KEY_LINK_HINT_ONLY = "cap_link_hint_only"
@@ -50,7 +52,12 @@ object ModulePrefs {
      * 因为这一路 hook 压根没装。链接助手只做只读观察、匹配不上就丢弃，
      * 没有副作用，默认开着才对；不想要的人可以在设置页关掉。
      */
+    fun isSmartIslandEnabled(s: SharedPreferences): Boolean =
+        s.getBoolean(KEY_SMART_ISLAND, s.getBoolean(KEY_LINK, true))
+
     fun isLinkEnabled(s: SharedPreferences): Boolean = s.getBoolean(KEY_LINK, true)
+
+    fun isPhoneEnabled(s: SharedPreferences): Boolean = s.getBoolean(KEY_PHONE, true)
 
     /** 只在岛上给个安静提示，不自动展开、不响铃 */
     fun isHintOnly(s: SharedPreferences): Boolean = s.getBoolean(KEY_LINK_HINT_ONLY, true)

@@ -557,7 +557,9 @@ internal class LocalLyricProvider(
         // 进度条就被当成换歌，锚点被清零、整首歌词对不上（用户反馈）。所以这里只认
         // 「歌名/歌手变了」，mediaId 仅用于日志与观察。
         val idChanged = mediaId != null && currentMediaId != null && mediaId != currentMediaId
-        val sameSong = resolved.sameSong
+        val sameSong = if (hostPackage == Constants.LX_PACKAGE) {
+            title == currentTitle && (artist.isNullOrBlank() || currentArtist.isNullOrBlank() || artist == currentArtist)
+        } else resolved.sameSong
         if (idChanged) {
             logger.info("mediaId 变化（$currentMediaId → $mediaId），仍按同一首处理：$title - $artist")
         }
@@ -577,6 +579,7 @@ internal class LocalLyricProvider(
                 }
                     currentSignature = songSignature(title, artist, mediaId ?: currentMediaId)
             }
+            if (hostPackage == Constants.LX_PACKAGE) publishPending(title, artist, duration, mediaId)
             return
         }
 
@@ -606,6 +609,7 @@ internal class LocalLyricProvider(
             }
         }
         preloadedLyric = null
+        if (hostPackage == Constants.LX_PACKAGE) { commitSwitch(PendingSwitch(title, artist, duration, mediaId)); return }
         if (!hasCommittedSong) {
             // 刚启动时没有「上一首」的位置可以比较，待定只会让开播一直不出词，直接提交。
             logger.info("启动后首曲立即提交：$title - $artist")

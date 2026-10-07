@@ -14,6 +14,7 @@ import io.github.proify.lyricon.xinghe.lyric.LocalLyricProvider
 import io.github.proify.lyricon.xinghe.lyric.ModuleLogger
 import io.github.proify.lyricon.xinghe.lyric.XingHeLyricProvider
 import io.github.proify.lyricon.xinghe.settings.ModulePrefs
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 
@@ -50,16 +51,20 @@ class HookEntry : XposedModule() {
 
     override fun onPackageReady(param: PackageReadyParam) {
         val packageName = param.packageName
-        if (!param.isFirstPackage) return
         if (packageName == Module.PACKAGE_NAME) return
         if (isSystemFramework(packageName)) return
+        if (packageName != Constants.PLAYER_PACKAGE_NAME &&
+            packageName != Constants.KUWO_PACKAGE &&
+            packageName !in Constants.LOCAL_PLAYER_PACKAGES
+        ) return
 
-        if (!lyricInstalledGate.compareAndSet(false, true)) return
         if (!isEnabled()) {
             logger.info("Module disabled in settings, skip " + packageName)
             return
         }
 
+        val installKey = packageName + "|" + currentProcessName()
+        if (!installedPackages.add(installKey)) return
         logger.info("Package ready: " + packageName + ", process=" + currentProcessName())
         try {
             if (packageName == Constants.PLAYER_PACKAGE_NAME) {
@@ -108,7 +113,7 @@ class HookEntry : XposedModule() {
 
     private companion object {
         val loadedLoggedGate = AtomicBoolean(false)
-        val lyricInstalledGate = AtomicBoolean(false)
         val linkInstalledGate = AtomicBoolean(false)
+        val installedPackages = ConcurrentHashMap.newKeySet<String>()
     }
 }

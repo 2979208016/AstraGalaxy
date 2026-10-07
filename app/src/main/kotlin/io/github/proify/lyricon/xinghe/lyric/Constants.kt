@@ -134,6 +134,13 @@ object Constants {
             packageName = LUNA_PACKAGE,
             displayName = "汽水音乐",
             sources = emptyList()
+        ),
+        // 洛雪音乐：歌词只在 RN 的 LyricModule 内存中流转，
+        // 由 LocalLyricProvider 的 RnLyricBridge 直接接收 setLyric；不扫本地文件。
+        LocalRecipe(
+            packageName = LX_PACKAGE,
+            displayName = "洛雪音乐",
+            sources = emptyList()
         )
     )
 

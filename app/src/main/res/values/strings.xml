@@ -17,8 +17,8 @@
     <string name="cap_lyric_on">正在推送歌词</string>
     <string name="cap_lyric_off">未开启</string>
 
-    <string name="cap_link">链接助手</string>
-    <string name="cap_link_on">复制到链接就上岛 · 应用需挂在后台</string>
+    <string name="cap_link">智能上岛</string>
+    <string name="cap_link_on">链接和手机号按开关上岛</string>
     <string name="cap_link_off">未开启</string>
 
     <string name="cap_more">更多能力</string>
@@ -34,13 +34,13 @@
     <string name="lyric_howto">怎么用</string>
     <string name="lyric_howto_body">在 LSPosed 中勾选作用域并强制停止应用，再到星流开启「胶囊歌词」。</string>
 
-    <string name="link_detail_title">链接助手</string>
+    <string name="link_detail_title">智能上岛</string>
     <string name="link_browser">打开方式</string>
     <string name="link_browser_system">跟随系统默认浏览器</string>
     <string name="link_browser_pinned">固定使用某个浏览器</string>
     <string name="link_browser_ask">每次让我选择</string>
     <string name="link_browser_pick">选择浏览器</string>
-    <string name="link_privacy_body">在系统框架中读取复制内容以识别 http/https 链接：全部在本机处理，不联网、不记录、不上传，识别不到立即丢弃。可在应用内随时关闭停止读取。</string>
+    <string name="link_privacy_body">在系统框架中按开关读取复制内容：全部在本机处理，不联网、不记录、不上传。关闭智能上岛总开关后不读取链接和手机号数据。</string>
     <string name="link_island_state">星河岛连接</string>
 
     <string name="ui_switch_enable">启用模块</string>
@@ -93,5 +93,5 @@
     <string name="link_howto">怎么用</string>
     <string name="link_module_on">模块已在 LSPosed 中启用</string>
     <string name="link_module_off">还没收到 LSPosed 的加载心跳（只影响提示，不影响复制上岛）</string>
-    <string name="link_scope_hint">作用域只需勾选「系统框架」（system），复制到链接就会送上岛。</string>
+    <string name="link_scope_hint">作用域只需勾选「系统框架」（system）。链接和手机号会按开关送上岛。</string>
 </resources>

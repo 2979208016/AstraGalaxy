@@ -21,7 +21,7 @@ class XingHeApp : Application() {
         super.onCreate()
         ModuleEnabledState.startListening(this)
         val prefs = ModulePrefs.of(this)
-        if (ModulePrefs.isEnabled(prefs) && ModulePrefs.isLinkEnabled(prefs)) {
+        if (ModulePrefs.isEnabled(prefs) && ModulePrefs.isSmartIslandEnabled(prefs)) {
             runCatching { LinkHub.warmUp(this) }
                 .onFailure { Log.w(TAG, "island warm-up failed: ${it.message}") }
         }

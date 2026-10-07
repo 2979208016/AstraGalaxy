@@ -81,7 +81,7 @@ class HomeActivity : BaseActivity() {
 
         root.addView(ui.gap(14))
 
-        val linkOn = ModulePrefs.isEnabled(prefs) && ModulePrefs.isLinkEnabled(prefs)
+        val linkOn = ModulePrefs.isEnabled(prefs) && ModulePrefs.isSmartIslandEnabled(prefs)
         val link = factory.build(
             iconRes = R.drawable.ic_open,
             tintRes = R.color.ok,
@@ -89,7 +89,7 @@ class HomeActivity : BaseActivity() {
             subtitle = getString(if (linkOn) R.string.cap_link_on else R.string.cap_link_off),
             checked = linkOn,
             onToggle = { value ->
-                prefs.edit().putBoolean(ModulePrefs.KEY_LINK, value).apply()
+                prefs.edit().putBoolean(ModulePrefs.KEY_SMART_ISLAND, value).apply()
                 toast(getString(if (value) R.string.ui_link_on else R.string.ui_link_off))
             },
             onOpen = { openPage(LinkDetailActivity::class.java) }
