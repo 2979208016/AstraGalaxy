@@ -162,10 +162,30 @@ internal class LocalLyricProvider(
         hookMediaSession()
         installSniffer()
         installBluetoothBoost()
+        installKugouLoader()
         logger.info(
             "Local lyric hooks installed for $hostPackage " +
                 "(${recipe?.displayName ?: "通用嗅探"}) in $processName"
         )
+    }
+
+    /**
+     * 酷狗系「歌词加载函数」直挂（词幕同款）。
+     *
+     * 酷狗/酷狗概念版把歌词文件路径交给 com.kugou.framework.lyric.LyricManager
+     * 的 load*(String, boolean)，词幕用 DexKit 按「方法体含
+     * file is not krc or lyc or txt file」定位它；这里不带 DexKit 的 so，
+     * 改为反射全类方法、按签名 (String,boolean) 挂载 + 解析结果自证。
+     * 拿到路径直接解 krc/lrc/lyc —— 比按 mtime+时长猜缓存目录可靠得多。
+     * 只在酷狗系进程里装；类对不上号时静默退化为目录扫描。
+     */
+    private fun installKugouLoader() {
+        if (!hostPackage.startsWith("com.kugou")) return
+        runCatching {
+            KugouLyricLoader(module, logger, classLoader) { lyric, source ->
+                onNetworkLyric(lyric, source, trustedBySource = true)
+            }.install()
+        }.onFailure { logger.error("酷狗歌词直挂失败", it) }
     }
 
     /**
@@ -557,11 +577,26 @@ internal class LocalLyricProvider(
         // 进度条就被当成换歌，锚点被清零、整首歌词对不上（用户反馈）。所以这里只认
         // 「歌名/歌手变了」，mediaId 仅用于日志与观察。
         val idChanged = mediaId != null && currentMediaId != null && mediaId != currentMediaId
+        // 网易云会把「当前歌词行」塞进 TITLE（PlayerTitle 已清洗成上一首歌名），
+        // 但它给的 mediaId 仍是当前这首的数字 id：词幕正是靠它把「显示中的歌词行」
+        // 和「真正播放中的歌」分开。这里把 mediaId 当成歌曲身份强证据：
+        // id 没变 → 即使标题被歌词行换掉也按同一首；id 变了 → 即使标题没变也切歌。
+        val neteaseIdStable = hostPackage == "com.netease.cloudmusic" &&
+            mediaId != null && currentMediaId != null && mediaId == currentMediaId
+        val neteaseIdSwapped = hostPackage == "com.netease.cloudmusic" && idChanged
         val sameSong = if (hostPackage == Constants.LX_PACKAGE) {
             title == currentTitle && (artist.isNullOrBlank() || currentArtist.isNullOrBlank() || artist == currentArtist)
+        } else if (hostPackage == "com.netease.cloudmusic") {
+            // id 没变就认同一首（哪怕标题是歌词行）；id 变了才算切歌；
+            // id 缺失时退回标题判据
+            when {
+                neteaseIdStable -> true
+                neteaseIdSwapped -> false
+                else -> resolved.sameSong
+            }
         } else resolved.sameSong
         if (idChanged) {
-            logger.info("mediaId 变化（$currentMediaId → $mediaId），仍按同一首处理：$title - $artist")
+            logger.info("mediaId 变化（$currentMediaId → $mediaId）")
         }
         logger.info("元数据：title=$rawTitle artist=$rawArtist id=$mediaId 时长=$duration 解析后=$title / $artist")
 
@@ -620,6 +655,16 @@ internal class LocalLyricProvider(
         }
         pendingLyric = null
         pendingSwitchLyric = null
+        // 网易云：mediaId 换了就是真切歌（词幕同款判据），不再等位置回调。
+        // 否则 metadata 已切、音频还没切那十几秒里，新歌词会被
+        // 「待定 + 无身份证明丢弃」的规则全挡掉，表现就是切歌后歌词不刷新。
+        if (hostPackage == "com.netease.cloudmusic" && neteaseIdSwapped) {
+            logger.info("网易云 mediaId 已切，直接提交：$title - $artist")
+            pendingSwitchAt = songSwitchAt
+            commitSwitch(PendingSwitch(title, artist, duration, mediaId))
+            startProgressTicker()
+            return
+        }
         pendingSwitch = PendingSwitch(title, artist, duration, mediaId)
         pendingSwitchAt = songSwitchAt
         sawPositionSinceSwitch = false

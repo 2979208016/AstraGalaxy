@@ -11,7 +11,13 @@
 
 - **本地歌词优先**：读播放器自己缓存好的歌词文件，离线可用
 - **网络歌词旁路**：本地没有时，在播放器进程里只读嗅探它刚收到的网络歌词
-- **逐字歌词**：KRC / QRC / 网易云 yrc 的字级时间轴随行推送，翻译与音译字段一并推送
+- **酷狗直挂**：酷狗/酷狗概念版在 LyricManager 里直接读「它自己加载的歌词文件路径」，
+  不再按 mtime+时长猜缓存目录
+- **酷我直取**：酷我在歌词下载与逐字解析器回调里拿现成的 LRC/KDTX/LRCX，
+  逐字时间按词幕同款 [kuwo:N] 因数还原
+- **网易云 mediaId 判歌**：媒体 id 没变就当同一首、变了立刻提交切歌，
+  避免「标题被歌词行伪装」造成的词不对歌
+- **逐字歌词**：KRC / QRC / 网易云 yrc / 酷我 LRCX 的字级时间轴随行推送，翻译与音译字段一并推送
 - **网络歌词旁路与蓝牙状态改写**：本地没有时，在播放器进程内旁路只读读取网络响应以嗅探歌词；并在部分播放器内改写蓝牙状态查询结果以唤醒播放器上报媒体与歌词（不连接真实设备）。功能均可在应用内开关单独停用
 
 ### 智能上岛
@@ -40,6 +46,8 @@ app/src/main/kotlin/io/github/proify/lyricon/xinghe/
 ├── lyric/                     歌词胶囊
 │   ├── LocalLyricProvider.kt  通用提供者：本地缓存 + 网络旁路
 │   ├── XingHeLyricProvider.kt MeloYou 专用提供者
+│   ├── KuwoLyricProvider.kt   酷我专用提供者（dat 扫描 + 歌词函数直取）
+│   ├── KugouLyricLoader.kt    酷狗系歌词文件路径直挂（LyricManager）
 │   ├── LyricLocal.kt          各平台歌词格式解析
 │   ├── HttpLyricSniffer.kt    okhttp 响应体只读旁路
 │   ├── RnLyricBridge.kt       React Native 歌词桥只读旁路

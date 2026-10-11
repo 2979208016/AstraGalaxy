@@ -68,6 +68,8 @@ internal object LyricParsers {
         "content", "lyrics", "text", "tlyric"
     )
     private val META_LINE = Regex("""^\[([A-Za-z]+)\s*:\s*(.*?)]$""")
+    /** KRC 明文的元信息行：[key:value] —— 值里允许出现 ']'（词幕 s20 同款） */
+    private val KRC_META = Regex("""^\[([A-Za-z_][A-Za-z0-9_]*)\s*:(.*)$""")
     private val KUWO_LINE = Regex("""^\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]""")
     private val KUWO_TAG = Regex("""<(-?\d+),(-?\d+)>""")
     private val LRC_TIME = Regex("""\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?]""")
@@ -118,6 +120,17 @@ internal object LyricParsers {
                 if (txt.isEmpty() || isPlaceholder(txt)) continue
                 if (firstLine == null) firstLine = txt
                 lines.add(parsed)
+                continue
+            }
+            // KRC 的元信息行是 [key:value]：值里可以带 ']'，
+            // 先用词幕 s20 的宽匹配再剥掉收尾 ']'（实测 ti 就是「青花瓷]」这种）
+            val km = KRC_META.find(line)
+            if (km != null) {
+                val value = km.groupValues[2].trim().trimEnd(']').trim()
+                when (km.groupValues[1].lowercase()) {
+                    "ti" -> title = value.ifBlank { null }
+                    "ar" -> artist = value.ifBlank { null }
+                }
                 continue
             }
             val mm = META_LINE.find(line) ?: continue
@@ -216,6 +229,17 @@ internal object LyricParsers {
             }
             val times = LRC_TIME.findAll(line).toList()
             if (times.isEmpty()) {
+                // KRC 明文里的元信息行是 [key:value]（值里可再带 ']'）；
+                // 词幕 s20 对它单独放行，否则带值的 [ti:歌名] 会被丢进歌词体
+                val krcMeta = KRC_META.find(line)
+                if (krcMeta != null) {
+                    val value = krcMeta.groupValues[2].trim().trimEnd(']').trim()
+                    when (krcMeta.groupValues[1].lowercase()) {
+                        "ti" -> title = value.ifBlank { null }
+                        "ar" -> artist = value.ifBlank { null }
+                    }
+                    continue
+                }
                 val mm = META_LINE.find(line) ?: continue
                 when (mm.groupValues[1].lowercase()) {
                     "ti" -> title = mm.groupValues[2].trim().ifBlank { null }
@@ -441,10 +465,22 @@ internal object LyricParsers {
 
     /**
      * 酷我 LRCX：`[00:19.706]<772,-772>就<2216,872>当<…>作…`
-     * 尖括号里是 `<结束,开始>`（相对本行起点，毫秒）。
+     *
+     * 尖括号里是 `<绝对结束, 时长-结束>`（毫秒），词幕 parseLrcxLyric
+     * 实测还原的公式（c/d 是 `[kuwo:N]` 的两个因数，N 的十位与个位）：
+     *   begin = lineBegin + (end + (dur - end)) / (2 * c)
+     *   end   = begin + (end - (dur - end)) / (2 * d)
+     * 之前当成 `<结束,开始>` 直接映射，逐字整体偏快。
      */
     fun parseKuwoLrcx(content: String): LocalLyric? {
         if (!content.contains("[kuwo")) return null
+        // [kuwo:N]：N 的十位=时长压缩因数 c、个位=间隔压缩因数 d（词幕同款还原）
+        val factors = Regex("""\[kuwo:(\d+)]""").find(content)
+            ?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        var c = factors / 10
+        var d = factors % 10
+        if (c <= 0) c = 1
+        if (d <= 0) d = 1
         var title: String? = null
         var artist: String? = null
         val lines = ArrayList<RichLyricLine>()
@@ -469,13 +505,16 @@ internal object LyricParsers {
                 index = tag.range.last + 1
                 text.append(chunk)
                 if (!isMeaningful(chunk)) continue
-                val start = lineBegin + (tag.groupValues[2].toLongOrNull() ?: 0L).coerceAtLeast(0L)
-                val end = lineBegin + (tag.groupValues[1].toLongOrNull() ?: 0L).coerceAtLeast(0L)
+                // <end, dur-end>：绝对结束与「时长-结束」（词幕还原公式）
+                val endAbs = tag.groupValues[1].toLongOrNull() ?: 0L
+                val durMinusEnd = tag.groupValues[2].toLongOrNull() ?: 0L
+                val begin = lineBegin + (endAbs + durMinusEnd) / (2L * c)
+                val end = begin + (endAbs - durMinusEnd) / (2L * d)
                 words.add(
                     LyricWord(
-                        begin = start,
-                        end = end.coerceAtLeast(start + 1),
-                        duration = (end - start).coerceAtLeast(1),
+                        begin = begin,
+                        end = end.coerceAtLeast(begin + 1),
+                        duration = (end - begin).coerceAtLeast(1),
                         text = chunk
                     )
                 )
