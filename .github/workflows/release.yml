@@ -1,0 +1,82 @@
+name: Release Build
+
+# 只跑 workflow_dispatch：签名物料（keystore + 口令）由调度方以输入传入，
+# 落盘后立即构建，**不写入仓库、不进 git 历史**。这里只是 CI 构建入口，
+# 不是发布仓库，产物仍需人工搬去发布目录。
+on:
+  workflow_dispatch:
+    inputs:
+      keystore_b64:
+        description: base64 of app/release.keystore
+        required: true
+      store_password:
+        description: keystore storePassword
+        required: true
+      key_alias:
+        description: key alias
+        required: true
+      key_password:
+        description: key password
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install SDK platform
+        run: |
+          sudo chown -R "$USER" "$ANDROID_SDK_ROOT" || true
+          SDKM=$(ls -d "$ANDROID_SDK_ROOT"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | tail -n 1)
+          echo "sdkmanager: $SDKM"
+          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+          "$SDKM" --install "platforms;android-37.0" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.1'
+
+      # 口令里含 # 与 !，必须走 env 传参，不能直接插值进 shell。
+      - name: Materialize signing files
+        env:
+          KS_B64: ${{ inputs.keystore_b64 }}
+          STORE_PASS: ${{ inputs.store_password }}
+          KEY_ALIAS: ${{ inputs.key_alias }}
+          KEY_PASS: ${{ inputs.key_password }}
+        run: |
+          printf '%s' "$KS_B64" | base64 -d > app/release.keystore
+          printf 'storePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$STORE_PASS" "$KEY_ALIAS" "$KEY_PASS" > app/signing.properties
+          ls -l app/release.keystore app/signing.properties
+
+      - name: Assemble release
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+        env:
+          GRADLE_OPTS: -Xmx2048m -Dorg.gradle.parallel=false
+
+      - name: Clean signing files
+        if: always()
+        run: rm -f app/release.keystore app/signing.properties
+
+      - name: Upload release APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astragalaxy-release
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 7

@@ -6,3 +6,4 @@ local.properties
 *.apk
 *.keystore
 !debug.keystore
+app/signing.properties

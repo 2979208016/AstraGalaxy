@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Android 12+（API 31）的启动画面由系统独立绘制：
+        不覆盖 windowSplashScreenBackground 时会用 ?android:colorBackground
+        （深色主题下几乎是纯黑）铺满整屏，并在首帧前吃掉所有触摸。
+        透明中转页必须把它和图标一起清空，才真正做到「无感启动」。
+    -->
+    <style name="Theme.LyricProvider.Transparent" parent="Theme.LyricProvider.Transparent.Base">
+        <item name="android:windowSplashScreenBackground">@android:color/transparent</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_transparent</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+    </style>
+</resources>

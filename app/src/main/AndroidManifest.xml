@@ -1,15 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 仅用于「打开 GitHub 项目主页」这类显式跳转；模块本体不联网 -->
+    <!-- 模块本体不联网；保留权限仅为个别需要显式跳转的场景 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 智能上岛短前台服务（Android 14+ shortService：无通知横幅、系统托管
+         约 3 分钟自动结束）：出卡期间给模块进程 FGS 归属，AMS 不杀不冻，
+         彻底终止「startService 拉活 → LMK 回收 → 下次再拉」的高频循环
+         （该循环叠加 LSPosed 包替换竞态是 system_server 崩溃诱因）。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE" />
 
     <!-- 向星河岛投送内容项。权限由星流（宿主）定义，普通级别，不弹授权框。
-         新版岛校验的是 com.astraflow.tool.island.* 这组名（岛侧对 source 包名
-         逐个 checkPermission），三个名字都声明上，正式包 / 调试包 / 旧版都覆盖。 -->
-    <uses-permission android:name="com.astraisland.permission.PUBLISH_ACTIVITY" />
+         岛侧对 source 包名逐个 checkPermission，正式包 / 调试包两条都声明上。 -->
     <uses-permission android:name="com.astraflow.tool.island.permission.PUBLISH_ACTIVITY" />
     <uses-permission android:name="com.astraflow.tool.debug.island.permission.PUBLISH_ACTIVITY" />
+
+    <!--
+      模块 ↔ system_server 的内部广播门禁（签名级）。
+      导出的两个 receiver（智能文件候选 / 出卡投递）只有本签名的应用与
+      system_server 能送达；用了签名级保护，安装时授予同签名进程，
+      不弹授权框、不需要用户操作。
+    -->
+    <permission
+        android:name="io.github.proify.astrafirmament.permission.ISLAND_COMMAND"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="io.github.proify.astrafirmament.permission.ISLAND_COMMAND" />
 
     <queries>
         <package android:name="org.lsposed.manager" />
@@ -25,10 +40,26 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="http" />
         </intent>
+        <!-- 智能文件：设置页要列出能装 APK 的应用（安装器选择） -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/vnd.android.package-archive" />
+        </intent>
+        <!-- 文件管理器可见性：Android 11+ 包可见性下，探测 file:// 需要显式声明 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="file" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" />
+            <data android:mimeType="application/vnd.android.package-archive" />
+        </intent>
     </queries>
 
     <application
         android:name=".app.XingHeApp"
+        android:enableOnBackInvokedCallback="true"
         android:allowBackup="true"
         android:description="@string/xposed_description"
         android:icon="@mipmap/ic_launcher"
@@ -36,20 +67,53 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.LyricProvider">
+        <!-- 报告分享 Provider：只读暴露 xinghe_report.zip 给系统分享面板 -->
+        <provider
+            android:name=".app.ReportProvider"
+            android:authorities="${applicationId}.reportprovider"
+            android:exported="false"
+            android:grantUriPermissions="true" />
 
-        <!-- 设置页 -->
-        <activity
-            android:name=".ui.page.SettingsActivity"
+        <!-- 智能文件副本 Provider：只暴露 filesDir/apk-incoming 里的只读 apk。
+             必须导出：卡片按钮由 system 身份代发（BAL 豁免），system 不是 uri owner，
+             且 AOSP 明确拒绝 system 创建 URI 授权，替不了我们向安装器/分享目标授权；
+             因此 URI 自带访问口令（/apk-incoming/<token>/<副本名>，见 ApkBridge），
+             不知道 token 就算枚举出副本名也读不到内容；再叠加「只读 + 只认 .apk +
+             canonical path 校验」把暴露面收到最小。 -->
+        <provider
+            android:name=".app.ApkIncomingProvider"
+            android:authorities="${applicationId}.apkprovider"
             android:exported="true"
-            android:label="@string/app_name"
+            android:grantUriPermissions="true" />
+
+        <!-- 智能文件候选接收器：system_server 发现 APK 后把真实路径交给本进程落地。
+             导出是必须的（system 发起的显式广播）；来源由签名级权限在 AMS 层拦住，
+             接收器内再过路径白名单，只认 /storage 与 /data/media 下的 .apk。 -->
+        <receiver
+            android:name=".app.ApkDiscoveryReceiver"
+            android:exported="true"
+            android:permission="io.github.proify.astrafirmament.permission.ISLAND_COMMAND">
+            <intent-filter>
+                <action android:name="io.github.proify.astrafirmament.APK_DISCOVERED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- v6 主界面：单 Activity 承载能力 / 设置 / 关于三页 -->
+        <!-- 主界面同时承担 Xposed 官方模块设置页入口（MODULE_SETTINGS）：
+             桌面图标隐藏后，LSPosed 的「打开」仍能到这里。 -->
+        <activity
+            android:name=".ui.shell.MainActivity"
+            android:exported="true"
+            android:label="@string/app_name_launcher"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.LyricProvider">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.INFO" />
+                <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
             </intent-filter>
         </activity>
 
-        <!-- 桌面入口 alias -->
+        <!-- 桌面入口 alias（名字被 setLauncherIconHidden 按 ComponentName 引用，不能改） -->
         <activity-alias
             android:name=".ui.LauncherAlias"
             android:enabled="true"
@@ -57,7 +121,7 @@
             android:icon="@mipmap/ic_launcher"
             android:label="@string/app_name_launcher"
             android:roundIcon="@mipmap/ic_launcher_round"
-            android:targetActivity=".ui.page.HomeActivity"
+            android:targetActivity=".ui.shell.MainActivity"
             android:theme="@style/Theme.LyricProvider">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -65,50 +129,36 @@
             </intent-filter>
         </activity-alias>
 
-        <!-- 首页 -->
-        <activity
-            android:name=".ui.page.HomeActivity"
-            android:exported="true"
-            android:label="@string/app_name_launcher"
-            android:theme="@style/Theme.LyricProvider" />
 
-        <!-- 能力详情页 -->
+        <!-- 智能上岛冷启动中转页：force-stop 唯一可穿透通道（startActivity）。
+             透明无 UI，即起即灭：拉活进程 + 触发出卡，用户无感知。 -->
         <activity
-            android:name=".ui.page.LyricDetailActivity"
-            android:exported="false"
-            android:label="@string/cap_lyric"
-            android:parentActivityName=".ui.page.HomeActivity"
-            android:theme="@style/Theme.LyricProvider.Detail" />
-        <activity
-            android:name=".ui.page.LinkDetailActivity"
-            android:exported="false"
-            android:label="@string/cap_link"
-            android:parentActivityName=".ui.page.HomeActivity"
-            android:theme="@style/Theme.LyricProvider.Detail" />
-
-        <!-- 打开链接的中转页（透明、瞬间 finish，不向外部开放） -->
-        <activity
-            android:name=".capability.link.LinkOpenActivity"
+            android:name=".app.IslandColdStartActivity"
             android:exported="false"
             android:excludeFromRecents="true"
             android:noHistory="true"
+            android:taskAffinity=""
             android:theme="@style/Theme.LyricProvider.Transparent" />
 
-        <!-- 底部抽屉 -->
-        <activity
-            android:name=".ui.page.SheetActivity"
-            android:exported="false"
-            android:theme="@style/Theme.LyricProvider.Sheet"
-            android:excludeFromRecents="true"
-            android:noHistory="true" />
-
-        <!-- 链接投递入口（ContentProvider，Binder 直连，不受广播管控影响） -->
-        <provider
-            android:name=".app.LinkInboxProvider"
-            android:authorities="io.github.proify.lyricon.xinghe.inbox"
+        <!-- 智能上岛冷启动入口（stopped 态唯一可穿透通道）：
+             system 发显式定向广播 + FLAG_INCLUDE_STOPPED_PACKAGES 拉活本进程。
+             清后台(force-stop) 后 startService 全被 AMS 丢弃，广播是唯一活路。
+             来源由签名级权限在 AMS 层拦住（见上方 <permission>）。 -->
+        <receiver
+            android:name=".app.IslandDeliverReceiver"
             android:exported="true"
-            android:grantUriPermissions="false" />
+            android:permission="io.github.proify.astrafirmament.permission.ISLAND_COMMAND">
+            <intent-filter>
+                <action android:name="io.github.proify.astrafirmament.DELIVER" />
+            </intent-filter>
+        </receiver>
 
+        <!-- 智能上岛宿主服务：App 未被 force-stop（自然回收/刚用过）时的
+             拉活优化路径；force-stop 态由上面的 receiver 广播兜底。 -->
+        <service
+            android:name=".app.IslandService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
 
         <!-- ============ LyricON 提供端识别 ============ -->
         <meta-data

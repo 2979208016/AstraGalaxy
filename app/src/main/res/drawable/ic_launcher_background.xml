@@ -4,11 +4,14 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 深空蓝黑渐变底 -->
+    <!-- 星穹：深空蓝紫底，顶部一圈星穹光晕 -->
     <path
-        android:fillColor="#0B1026"
+        android:fillColor="#070A18"
         android:pathData="M0,0 h108 v108 h-108 z" />
     <path
-        android:fillColor="#1A2350"
-        android:pathData="M0,0 h108 v54 q-54,12 -108,0 z" />
+        android:fillColor="#141B3E"
+        android:pathData="M0,0 h108 v46 q-54,14 -108,0 z" />
+    <path
+        android:fillColor="#1E1546"
+        android:pathData="M0,108 h108 v-30 q-54,-10 -108,0 z" />
 </vector>

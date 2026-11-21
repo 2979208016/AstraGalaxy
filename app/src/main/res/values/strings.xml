@@ -1,97 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AstraGalaxy</string>
-    <string name="app_name_launcher">星河</string>
+    <string name="app_name">AstraFirmament</string>
+    <string name="app_name_launcher">星穹</string>
 
-    <string name="xposed_description">星河 · 星流增强插件。在系统框架中读取全部复制内容（默认开启，仅本地匹配链接上岛，不记录不上传，应用内可关闭）；在音乐应用内旁路读取网络响应（用于嗅探歌词）及改写蓝牙状态查询结果（用于唤醒播放器上报歌词，不连接真实设备）；功能均可在应用内开关单独停用。</string>
+    <string name="xposed_description">星穹 · 星流增强插件。在系统框架中读取全部复制内容（默认开启，只在本机匹配链接 / 手机号决定是否出卡，不保存原文、不上传）；在音乐应用进程内旁路只读读取网络响应（嗅探歌词）并改写蓝牙状态查询结果（唤醒播放器上报歌词，不连接真实设备）；授予 Root 后读取 /data/adb 下的 LSPosed 框架日志（判断模块是否加载、生成日志报告）、读取该 WiFi 的密码、把用户下载或从 QQ / TIM 收到的安装包复制到暂存目录并在用户点「删除」时删除原始安装包——以 root 读写本机文件，不是只读，但不 remount、不改系统分区。上述行为都能在应用内单独关闭，不上传任何数据。</string>
 
     <string name="lyricon_module_author">yiyi</string>
-    <string name="lyricon_module_description">星河 · 星流增强插件。读取系统复制内容识别链接，在音乐应用内旁路读取网络响应及改写蓝牙状态查询以获取歌词。全部本地处理，应用内开关可单独停止上述行为。创作者：yiyi，免费公益。</string>
-    <string name="module_author_display">创作者：yiyi</string>
-    <string name="module_contact_display">QQ：2979208016</string>
-    <string name="module_free_display">免费公益</string>
+    <string name="lyricon_module_description">星穹 · 星流增强插件。读取系统全部复制内容识别链接与手机号（默认开启，只在本机匹配，不保存、不上传）；在音乐应用进程内旁路只读读取网络响应、改写蓝牙状态查询以获取歌词；Root 用于读取 LSPosed 框架日志（含 /data/adb）、读取 WiFi 密码、复制安装包并在删除时删除原始安装包——以 root 读写本机文件，不只是读取。均可在应用内单独关闭。创作者：yiyi，免费公益。</string>
 
-    <string name="home_subtitle">星流增强插件</string>
-
-    <string name="cap_lyric">歌词胶囊</string>
-    <string name="cap_lyric_on">正在推送歌词</string>
-    <string name="cap_lyric_off">未开启</string>
-
-    <string name="cap_link">智能上岛</string>
-    <string name="cap_link_on">链接和手机号按开关上岛</string>
-    <string name="cap_link_off">未开启</string>
-
-    <string name="cap_more">更多能力</string>
-    <string name="cap_more_desc">后续更新会在这里出现</string>
-
-    <string name="home_settings">设置</string>
-    <string name="home_about">关于星河</string>
-
-    <string name="lyric_detail_title">歌词胶囊</string>
-    <string name="lyric_status_ready">已生效</string>
-    <string name="lyric_status_off">已关闭</string>
-    <string name="lyric_supported">适配的应用</string>
-    <string name="lyric_howto">怎么用</string>
-    <string name="lyric_howto_body">在 LSPosed 中勾选作用域并强制停止应用，再到星流开启「胶囊歌词」。</string>
-
-    <string name="link_detail_title">智能上岛</string>
-    <string name="link_browser">打开方式</string>
-    <string name="link_browser_system">跟随系统默认浏览器</string>
-    <string name="link_browser_pinned">固定使用某个浏览器</string>
-    <string name="link_browser_ask">每次让我选择</string>
-    <string name="link_browser_pick">选择浏览器</string>
-    <string name="link_privacy_body">在系统框架中按开关读取复制内容：全部在本机处理，不联网、不记录、不上传。关闭智能上岛总开关后不读取链接和手机号数据。</string>
-    <string name="link_island_state">星河岛连接</string>
-
-    <string name="ui_switch_enable">启用模块</string>
-    <string name="ui_switch_hide">隐藏模块桌面图标</string>
-    <string name="ui_switch_hide_hint">隐藏后仍可从 LSPosed 进入本页</string>
-    <string name="ui_btn_lsposed">启动 LSPosed</string>
-
-    <string name="ui_title_apps">适配应用清单</string>
-    <string name="ui_apps_body">酷狗音乐、酷狗概念版、酷我音乐、QQ 音乐、汽水音乐、网易云音乐、OPPO ／ 欢太音乐、波点音乐、MeloYou、洛雪音乐助手。\n\n其它应用：勾选作用域后自动尝试本地缓存与网络嗅探。</string>
-
-    <string name="ui_title_about">关于星河</string>
-    <string name="ui_sub_about">星流增强插件</string>
-    <string name="ui_title_author">创作者</string>
-    <string name="ui_sub_author">yiyi · QQ 2979208016</string>
-    <string name="ui_title_free">免费公益</string>
-    <string name="ui_sub_free">禁止倒卖</string>
-
-    <string name="ui_title_update">GitHub 项目主页</string>
-    <string name="ui_sub_update">https://github.com/2979208016/AstraGalaxy</string>
-
-    <string name="ui_dialog_ok">知道了</string>
-    <string name="ui_dialog_close">关闭</string>
-
-    <string name="ui_about_body">星河是星流（AstraFlow）的增强插件，把正在播放的歌词和复制内容里的链接送到星河岛。\n\n技术行为如实说明：\n1. 链接助手：在系统框架中读取全部复制内容（默认开启），仅用于本地匹配并提取 http/https 链接送上星河岛，不记录、不上传；\n2. 歌词胶囊：在音乐应用内通过旁路只读读取网络响应以嗅探歌词，并改写蓝牙连接状态查询结果以触发播放器上报媒体歌词（不连接真实蓝牙设备）；\n3. 上述行为均可通过本应用内对应的功能开关完全停止。\n\n在 LSPosed 里启用模块并勾选目标应用，重启应用即可。</string>
-
-    <string name="ui_author_body">创作者：yiyi\n联系 QQ：2979208016\n\n免费公益，禁止倒卖与付费代装。</string>
-
-    <string name="ui_free_body">星河免费开源，遵循 MIT 许可。请勿商用或二次售卖。</string>
+    <string name="ui_apps_body">本地歌词：酷狗音乐、酷我音乐、QQ 音乐（含 HD）、汽水音乐、网易云音乐、欢太音乐、波点音乐、MeloYou、洛雪音乐助手、Apple Music、Poweramp、Salt Player、MusicFree、Gramophone、Symfonium，直接读各自的歌词缓存，原文与译文一起下发。\n\n其他应用：只要通过系统媒体会话播报歌曲信息（例如 Spotify），就按歌名与歌手去公开词源取词；词源为网易云、酷狗、QQ、酷我、LRCLIB，多源并发，取到即用。\n\n没有译文的歌不会伪造译文；没有逐字的歌就只有整行歌词。</string>
 
     <string name="ui_need_lsposed">未检测到 LSPosed 管理器</string>
-    <string name="ui_hide_on">已隐藏桌面图标</string>
-    <string name="ui_hide_off">已恢复桌面图标</string>
-    <string name="ui_enable_on">模块已启用，重启目标应用生效</string>
-    <string name="ui_enable_off">模块已停用</string>
-    <string name="ui_link_on">链接助手已开启</string>
-    <string name="ui_link_off">链接助手已关闭</string>
-    <string name="ui_browser_saved">已保存</string>
-    <string name="ui_msg_lsposed">未检测到 LSPosed 管理器</string>
-
-    <string name="home_not_active">还没收到 LSPosed 的加载心跳：歌词与链接暂时不会生效。请在 LSPosed 中启用模块并重启；若已启用，重启任意一个被勾选的应用即可让它上报。</string>
 
     <!-- 功能卡的点按引导：让用户知道卡片还能进去做单独设置 -->
     <string name="ui_card_tap_hint">点卡片进入设置</string>
-
-    <string name="island_ready">已连接</string>
-    <string name="island_not_installed">未安装星流</string>
-    <string name="island_waiting">未就绪</string>
-    <string name="island_rejected">被拒绝</string>
-
-    <string name="link_howto">怎么用</string>
-    <string name="link_module_on">模块已在 LSPosed 中启用</string>
-    <string name="link_module_off">还没收到 LSPosed 的加载心跳（只影响提示，不影响复制上岛）</string>
-    <string name="link_scope_hint">作用域只需勾选「系统框架」（system）。链接和手机号会按开关送上岛。</string>
 </resources>

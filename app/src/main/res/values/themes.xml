@@ -12,26 +12,15 @@
     </style>
 
     <!-- 细节页：从右侧进入，返回时退出，给一点空间感 -->
-    <style name="Theme.LyricProvider.Detail" parent="Theme.LyricProvider">
-        <item name="android:windowAnimationStyle">@style/Anim.XingHe.Detail</item>
-    </style>
 
     <!-- 底部抽屉：从下往上滑，带遮罩 -->
-    <style name="Theme.LyricProvider.Sheet" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowContentOverlay">@null</item>
-        <item name="android:windowAnimationStyle">@style/Anim.XingHe.Sheet</item>
-        <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:colorBackgroundCacheHint">@null</item>
-    </style>
 
     <!--
         打开链接的中转页：完全透明、无动画，用户只会看到浏览器打开。
         把它做成可见界面是为了让系统把它当作「前台语境」，
         从而允许后续跳转到浏览器（后台直接启动会被拦）。
     -->
-    <style name="Theme.LyricProvider.Transparent" parent="android:Theme.Material.NoActionBar">
+    <style name="Theme.LyricProvider.Transparent.Base" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowContentOverlay">@null</item>
@@ -40,7 +29,19 @@
         <item name="android:backgroundDimEnabled">false</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- 启动窗口（starting window / preview window）必须关死：
+             它是系统在 Activity 画出第一帧之前替你铺的**另一个全屏窗口**，
+             背景取 windowBackground 的默认色。透明页用它做转场时，视觉上
+             就是一整块能盖上全屏、并且吃掉所有触摸的黑板。 -->
+        <item name="android:windowDisablePreview">true</item>
     </style>
+
+    <!--
+        透明中转页：完全透明、无动画。Android 12+ 的启动画面（SplashScreen）
+        由一个独立的系统窗口绘制，不读 windowBackground 的透明值，必须由
+        values-v31/themes.xml 覆盖 windowSplashScreen* 才能真的不闪。
+    -->
+    <style name="Theme.LyricProvider.Transparent" parent="Theme.LyricProvider.Transparent.Base" />
 
     <style name="Anim.XingHe" parent="@android:style/Animation.Activity">
         <item name="android:activityOpenEnterAnimation">@anim/slide_in</item>
@@ -49,17 +50,5 @@
         <item name="android:activityCloseExitAnimation">@anim/slide_out</item>
     </style>
 
-    <style name="Anim.XingHe.Detail" parent="@android:style/Animation.Activity">
-        <item name="android:activityOpenEnterAnimation">@anim/slide_in</item>
-        <item name="android:activityOpenExitAnimation">@anim/fade_out</item>
-        <item name="android:activityCloseEnterAnimation">@anim/fade_in</item>
-        <item name="android:activityCloseExitAnimation">@anim/slide_out</item>
-    </style>
 
-    <style name="Anim.XingHe.Sheet" parent="@android:style/Animation.Activity">
-        <item name="android:activityOpenEnterAnimation">@anim/sheet_in</item>
-        <item name="android:activityOpenExitAnimation">@anim/none</item>
-        <item name="android:activityCloseEnterAnimation">@anim/none</item>
-        <item name="android:activityCloseExitAnimation">@anim/sheet_out</item>
-    </style>
 </resources>

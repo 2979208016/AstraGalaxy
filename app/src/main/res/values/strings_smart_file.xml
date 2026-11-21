@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 智能文件相关文案（strings.xml 有人并行修改，这里独立成文件避免冲突） -->
+<resources>
+    <!-- 删除的三种真实结局分开提示，避免把失败说成成功 -->
+    <string name="smart_file_delete_done">已删除原安装包</string>
+    <string name="smart_file_delete_unknown">找不到原安装包的位置</string>
+    <string name="smart_file_delete_failed">删除失败，需要 Root 权限</string>
+</resources>

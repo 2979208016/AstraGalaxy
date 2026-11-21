@@ -1,7 +1,7 @@
-# AstraGalaxy
+# AstraFirmament
 
 > 星流（AstraFlow）增强插件。把手机里正在发生的事送到星河岛，并让你在岛上直接操作。
-> 桌面上显示的名字是「星河」。
+> 桌面上显示的名字是「星穹」。
 
 ## 能力
 
@@ -22,60 +22,157 @@
 
 ### 智能上岛
 
-统一处理复制内容中的链接和手机号，所有处理均由总开关和分类开关控制。关闭智能上岛总开关后，不读取链接或手机号。
+统一处理复制内容中的链接、手机号、安装包下载与 WiFi 连接事件。总开关通配联动：开→全部子开关开，关→全部子开关关。
 
-- **链接**：识别 http/https 链接，提供打开或忽略，支持系统默认、固定浏览器或每次选择。
-- **手机号**：复制内容包含手机号时提供忽略、保存到通讯录、拨号。
-- 全部在本机完成：不联网、不记录、不上传；每一类功能均可单独关闭。
+- **链接**：复制 http/https 链接后弹岛，一键打开（用户选定的浏览器）或忽略。
+- **手机号**：复制内容包含手机号时弹岛，提供拨号、保存到通讯录、忽略。
+- **智能文件**：APK **下载真正完成**后才弹岛（写盘完成检测 + ZIP 结构校验 + 有界重投；只认 mtime 在 15 分钟内的新文件，旧包被移动/媒体库重扫不会再弹一次），卡上显示**包名 / 下载时间 / 大小**，按钮为 **分享 / 查看（系统面板，定位到原始文件）/ 安装（用户选定的安装器，走数据分区副本，避免外部存储抽取 native lib 失败）/ 知道了**；副本只做中间产物，删除时一并清理，设置页可**立即清理**并选择**自动清理档位**（不清理 / 1 / 3 / 7 / 30 天）。
+  system 侧只做「发现」：把下载库 / MediaStore 给到的**真实路径**用显式广播 + 一次性口令交给模块进程；
+  由模块进程用 root（KernelSU）`stat`/`cp` 到私有目录，再跑四层完整性校验（大小一致、zip 头 `PK\x03\x04`、
+  尾部 EOCD 注释长度正好收在文件末尾、`getPackageArchiveInfo` 清单可解析），通过后才请 system 出卡。
+  之所以这样分工：`system_server`（uid 1000）实测读不到 `/storage/emulated/0`，任何在 system 里 open 文件的校验都会失败。
+  「删除」删的是**用户的原始安装包**（模块进程 `su rm`）并清掉副本；安装/分享仍由 system 代发，uri 指向模块自己的非导出 Provider。
+  两条链路分开处理，互不打扰：
+  - **下载完成链路**（浏览器 / 系统下载器）：在下载管理进程里旁听 `DownloadProvider`。
+    下载一开始（MIME 或地址后缀像安装包）就「关注」这条记录，等它报成功再接手；
+    成功那次通知里没带 id 的（先建记录、再分块写的浏览器）也能靠关注列表补上。
+  - **目录新增链路**（TIM / QQ / 微信这类自己落文件的）：用 root 只读扫描**用户可配置的来源目录**，
+    出厂默认 17 条（QQ/TIM 新版落 `Android/data`、老版落 `tencent/`，微信/企业微信、`Download`、
+    夸克/UC/QQ 浏览器/百度网盘/迅雷/Chrome）。只认**新增**：某个目录第一次被扫到时，里面已有的
+    安装包只登记不弹；之后新出现的才弹。扫描层级可选「仅目录本身 / 向下 2 / 3 / 5 层 / 不限」，
+    默认 3 层（QQ 偶尔会多套一层目录）。
+  两条链路都不注入 TIM/QQ 的进程，也不改系统分区：前者只在系统下载器里旁听，后者只用 root 只读 `stat`。
+- **WiFi 助手**：连接时弹岛显示 WiFi 名与实时网速，可复制或用系统分享面板分享密码（root 只读配置）。SSID 四路兜底（`cmd wifi status` → `dumpsys wifi` → `iw dev wlan0 link` → 配置库 `IsMostRecentlyConnected`），取不到就显示占位而不冒充网络名；复制/分享由 system 侧代做——后台进程写剪贴板会被 appops 拦、直接 startActivity 会被后台启动限制拦。断开时弹岛提示并可跳网络设置。
+- **蓝牙岛**：连上音频类蓝牙设备（A2DP / 头戴 / LE Audio，走 profile 状态而不是 ACL，手表手环不弹）时弹岛，标题是设备名；按钮为断开连接 / 关闭蓝牙 / 蓝牙设置 / 知道了。断开连接由 system 侧通过 profile 代理发起，失败自动退到设置页。
+- **单卡替换**：岛上同一时刻只保留 1 张星河卡，新内容直接替换旧卡；同内容在展示期内不重复弹。
+- **显示时长**：设置页有一个「默认显示时长」，范围 10–150 秒（拖到最左等于最长 150 秒，没有「常驻」档：前台服务与卡片共用同一个时长，卡在就一直有保护，绝不出现「卡还在但已失效」）；每个子功能行尾有箭头，点开展开后在该行**下方**出现同款进度条，用来单独设置这个功能的时长（展开时下方内容整体下移，不会遮挡）。没单独设过的功能一律沿用默认值，面板里点「恢复默认」即可退回跟随默认。
+- **Spotify 歌词**：先拦 App 自己请求歌词的响应（protobuf 解析入口，命中即用）→ 磁盘缓存 → 公开歌词源（网易云 / 酷狗 / 酷我 / QQ 音乐 / LRCLIB，五源并行）→ 官方 color-lyrics（仅在抓到 App 自身的 authorization 头时启用）。逐行歌词 + 原文译文同行 + 本地缓存。trackId 严格校验 22 位 base62，播客/广告/本地文件不查词
+- **多源兜底**：按歌名/歌手/时长查词（歌名归一化 + 拉丁重音折叠 + 查询变体 + 时长加减分 + 歌手校验），命中才出词，宁缺不推错；只有「所有源都明确答复没有歌词」才写负缓存（30 分钟后可重试），超时/拒答不写
+- **清后台不失效**：划卡清理（force-stop）后广播与服务都被系统丢弃，但 Activity 启动永远放行——模块用透明中转页完成出卡，无感知、无需挂后台。
+- 全部在本机完成：不上传任何数据。仅有的外发请求是歌词取词——公开词源（`music.163.com` 公开接口、`lrclib.net`）只发歌名/歌手/时长；Spotify 官方接口只在抓到宿主自身 token 时直连，且只发 trackId。每一类功能均可单独关闭。
+
+首页有「权限中心」入口：Root 状态（用途见下方「隐私与权限」）、LSPosed 模块加载状态、星河岛连接状态一目了然。
+
+开发者选项可以生成日志报告：一份 zip 压缩包含三份文件（机型信息 + 模块运行日志 + 本模块相关的 LSPosed 框架日志行），一键分享给开发者。
+
+- 日志**默认关闭**，应用内「记录详细日志」关掉后，连框架日志通道也不再写入——开关是真的开关，不是只写一个偏好值。
+- 报告里的文件路径、完整网址、WiFi 名称、蓝牙设备名与 MAC、歌名歌手、剪贴板内容一律脱敏，框架日志只保留本模块产生的行，其它模块的行直接丢弃。
+
+## 隐私与权限（如实说明）
+
+应用内「关于 → 如实说明」写的是同一份内容，这里给仓库读者一份同样的说明。
+
+**权限与数据**（每一项都能在应用内单独关闭）
+
+- **剪贴板**：在系统框架内读取**全部**复制内容，默认开启；只在本机匹配链接、手机号来决定是否出卡，
+  不保存原文、不上传。关掉总开关即完全不读；只关子开关时仍会读取后比对，不匹配立即丢弃。
+- **网络响应**：在音乐应用进程内旁路只读读取网络响应（okhttp / okio / RN 桥等），只用于嗅探歌词，不上传。
+- **蓝牙**：在酷我音乐、汽水音乐内把蓝牙状态查询结果改成「已连接」，让播放器持续上报媒体信息与歌词；
+  不连接任何真实设备。
+- **媒体信息**：读取播放器的歌名、歌手、时长与播放进度，用于歌词胶囊。
+
+**Root 用途**（授权后以 root 读写本机文件，**不是只读**）
+
+- 生成日志报告时读取 LSPosed 框架日志（系统目录，无 root 读不到）。
+- WiFi 助手「复制 / 分享密码」时读取该 WiFi 的密码（`WifiConfigStore.xml` 或 `wpa_supplicant.conf`）。
+- 把用户下载或从 QQ / TIM 收到的安装包**复制**到应用暂存目录，供安装、查看、分享；
+  用户点「删除」时用 root **删除原始安装包**。
+- 未授权时：歌词胶囊、链接与手机号、WiFi 岛与蓝牙岛照常；日志报告缺少 LSPosed 日志，
+  WiFi 密码复制 / 分享与智能文件（出卡 / 安装 / 查看 / 分享 / 删除）不可用。
+
+**日志**
+
+- 开关默认关闭；开启后生成 `xinghe_report.zip`：01 设备与系统信息、02 模块日志、
+  03 只保留本模块相关行的 LSPosed 框架日志。
+- 报告按脱敏规则写入：不含完整文件路径、WiFi 名称、蓝牙设备名与 MAC、歌名与歌手、
+  完整网址、剪贴板内容。
+- 关掉开关即停止记录（连框架日志通道也不再写）；报告只留在应用数据目录，可随时清除，不会上传。
+
+**我们不做的事**
+
+- 不修改系统分区（不 remount、不改 `/system`），不写其它应用的数据目录。
+- 不上传任何数据；唯一的外发请求是取词——向公开词源（网易云、酷狗、QQ、酷我、LRCLIB）
+  只发歌名 / 歌手 / 时长，或按 trackId 请求 Spotify 官方接口（复用 Spotify 播放器自身的登录授权请求头，
+  本模块不自行登录、不另存账号与设备信息）。
+- 不使用常驻后台服务：只在出卡时起一个系统托管的短时前台服务，与卡片同时结束（卡片时长上限 150 秒；
+  异常路径另有约 4 分钟的硬上限，到点自动退出）。
+- 不记录键盘输入；不申请通讯录、短信、相册等权限。
 
 ## 作用域
 
 | 能力 | 在 LSPosed 里勾什么 |
 | --- | --- |
-| 歌词胶囊 | 音乐播放器本身（MeloYou、酷狗、网易云等） |
-| 智能上岛 | **系统框架**（`system` / `android`，剪贴板与公共文件监视住在这里） |
+| 歌词胶囊 | 音乐播放器本身：酷狗/酷狗概念版、酷我、QQ 音乐、QQ 音乐 HD、汽水音乐、网易云、OPPO ／ 欢太音乐、波点音乐、MeloYou、洛雪、Apple Music、Poweramp、Salt Player、MusicFree、Gramophone、Symfonium、Spotify（`com.spotify.music` 必勾） |
+| 智能上岛 | **系统框架**（`system` / `android`，剪贴板监视住在这里） |
+| 智能文件 | **下载管理**（`com.android.providers.downloads`，APK 下载完成检测驻在这里） |
 
-不要勾系统界面（`com.android.systemui`），智能上岛不依赖它。
+> 推荐作用域有两份来源，改一处必须同步另一处：`app/src/main/resources/META-INF/xposed/scope.list`
+> 与 `app/src/main/res/values/arrays.xml` 的 `xposed_scope`。APK 里只要存在
+> `META-INF/xposed/java_init.list`（即用 libxposed API 声明的模块），LSPosed 就**只认 scope.list**
+> 来打「推荐」标，manifest 里的数组会被忽略 —— 5.3 的 Spotify 等 7 个宿主只有数组、没有 scope.list，
+> 所以列表里没有推荐标，也不会默认勾选。
 
 ## 结构
 
 ```
-app/src/main/kotlin/io/github/proify/lyricon/xinghe/
+app/src/main/kotlin/io/github/proify/astrafirmament/
 ├── Module.kt                  全插件共用常量
-├── xposed/HookEntry.kt        模块入口，按进程分派能力
-├── lyric/                     歌词胶囊
-│   ├── LocalLyricProvider.kt  通用提供者：本地缓存 + 网络旁路
-│   ├── XingHeLyricProvider.kt MeloYou 专用提供者
-│   ├── KuwoLyricProvider.kt   酷我专用提供者（dat 扫描 + 歌词函数直取）
-│   ├── KugouLyricLoader.kt    酷狗系歌词文件路径直挂（LyricManager）
-│   ├── LyricLocal.kt          各平台歌词格式解析
-│   ├── HttpLyricSniffer.kt    okhttp 响应体只读旁路
-│   ├── RnLyricBridge.kt       React Native 歌词桥只读旁路
-│   ├── KuwoLyric.kt           酷我歌词定位
-│   ├── KuwoStreamTee.kt       酷我网络输出旁路
-│   ├── Constants.kt           平台配方与包名
-│   └── ModuleLogger.kt        日志
-├── capability/link/           智能上岛
-│   ├── LinkPatterns.kt        链接与手机号识别
-│   ├── LinkHook.kt            system_server 剪贴板与公共目录钩子
-│   ├── LinkHub.kt             智能上岛卡片枢纽
-│   ├── LinkOpenActivity.kt    打开链接的中转页
-│   └── BrowserChoice.kt       浏览器列表
+├── xposed/HookEntry.kt       模块入口（按进程分派 + HookRegistry 统一注册）
+├── hook/                      目标进程加载的 Hook 逻辑
+│   ├── LinkHook.kt            system 侧智能上岛（剪贴板/WiFi/代发）
+│   ├── cimu/                  歌词 Hook：LocalLyricProvider（通用）、
+│   │                          XingHeLyricProvider（MeloYou）、KuwoLyricProvider（酷我）、
+│   │                          SpotifyLyricProvider（MediaSession + 公开词源 + 官方旁路）、KugouLyricLoader（酷狗直挂）、
+│   │                          Apple/PowerAmp/QQMusicHd/Salt/MusicFree/Gramophone/Symfonium（独立宿主适配，共用 LyricSupport）、
+│   │                          HttpLyricSniffer（okhttp 旁路）、RnLyricBridge（RN 桥）、PlayerTitle（标题清洗）
+│   └── core/                  公共基建：HookRegistry、HookCrashLog、ModuleLogger
+├── lyric/                     歌词数据侧（LyricLocal 六格式/Kuwo/Luna/LyricIndex + 本地歌词查找）
+│   └── online/                在线词源（网易云/酷狗/QQ/LRCLIB 四源并行，原文/译文/音译同行）
+├── capability/link/           模块进程：卡片枢纽 LinkHub、日志报告 DevLog、
+│                              识别 LinkPatterns、浏览器/安装器列表
+├── shared/                    两端可用纯 Kotlin（零 Android 依赖：SuReader/Redact/Qrc/KuwoStreamTee/LspLoadProbe）
 ├── settings/ModulePrefs.kt    全模块统一的偏好中心
-├── app/                       应用进程（入口、链接接收）
-└── ui/                        界面
-    ├── widget/                毛玻璃卡片、自绘开关、动效
-    └── page/                  首页、能力详情、底部抽屉
+├── app/                       应用组件（Service/透明页/Receiver/报告 Provider）
+└── ui/                        界面（6.0 重构）
+    ├── shell/                 底栏三页：能力 / 设置 / 关于（单 Activity）
+    ├── theme/                 三套预设风格（澎湃 / iOS 液态玻璃 / 莫奈）+ 自定义
+    ├── widget/                毛玻璃、自绘开关、动效、GlassContainer
+    └── page/                  旧 View 入口只剩 HomeActivity（LSPosed 模块设置跳转）与 BaseActivity
 ```
 
 新增能力的做法：在 `capability/` 下建一个目录，在 `ModulePrefs` 加一个开关字段，在首页加一张能力卡。不需要动其它能力。
 
 ## 使用
 
-1. 在 LSPosed 中启用 AstraGalaxy；
+1. 在 LSPosed 中启用 AstraFirmament；
 2. 勾选要适配的应用（推荐作用域已默认勾选常用音乐平台）；
 3. 重启对应应用；
-4. 打开星河 App，在首页按需开启能力（首页顶部会显示星河岛连接状态）。
+4. 打开星河 App：底栏分「能力 / 设置 / 关于」三段。能力页开启歌词胶囊与智能上岛，
+   每个子能力行尾箭头可就地展开单独设置（显示时长、暂存副本清理、自动清理周期）；
+   设置页可切换界面风格（澎湃 / iOS 液态玻璃 / 莫奈）并逐项自定义。
+
+## 界面与动效（7.7）
+
+界面是 Compose 写的，观感来自上游部件而不是自绘：`ui/cupertino/` 是从参考项目移植的
+`zone.ien.hig` + `io.github.kyant0:backdrop` 组件层；整页画面会录成一层 backdrop，
+底栏从中取样做模糊与折射（液态玻璃）。
+
+- 三栏：**能力**（歌词胶囊、智能上岛与它的五个子能力，全部行内展开）/ **设置**（模块开关、
+  运行状态与工具）/ **关于**（简介、如实说明、赞助）。
+- **底栏是我们自己的 `AstraTabBar`**（不再直接用上游 `CupertinoNavigationBar`）：选中胶囊的位置
+  直接取分页器的连续位置 `currentPage + currentPageOffsetFraction`，拖动、惯性、点标签的弹簧归位
+  全由分页器一套物理驱动，胶囊不会「追着」页面跑，所以滑动是连续的一路跟手、不会顿挫或闪跳；
+  动画中途再点一次只是换目标（可打断）。按住底栏左右拖动也能换页。
+- **底栏是玻璃而不是半透明灰片**：底色 `0x7C838C@42%`、选中胶囊是白色薄玻璃
+  （`White@13%`，按压时出现折射色散），底栏与胶囊各有一道 `1dp` 竖向渐变描边（上沿亮、
+  下沿几乎透明）加顶部斜光——星穹的页面是近黑渐变，照搬上游的深色取值会看起来「只有一个黑底」。
+- **底栏位置与让位**：`navigationBars` 之上再垫 14dp；`AstraSubPage` 默认给底栏留出
+  `AstraDimens.tabBarClearance`（64 + 14 + 32dp），滚到底时最后一行停在底栏上方；
+  只有全屏覆盖层（权限中心 / 开发者选项）不留。
+- **预测性返回是纯平移**：上层页面按手势进度整体右移、露出下面那一页（拉多少露多少，1:1 跟手），
+  不做淡入淡出与缩放——那两种效果会让连续感断掉，拖到一半反悔时还会闪一下。
+- `minSdk` 因为上游部件是 29；`compileSdk`/`targetSdk` 不变。
+- 这份移植件在 `docs/checks.py` 里只有最小检查（不按本项目的函数长度规则拆），便于跟随上游更新。
 
 ## 许可
 

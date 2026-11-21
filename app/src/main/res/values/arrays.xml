@@ -30,8 +30,22 @@
         <item>com.heytap.music</item>
         <item>cn.wenyu.bodian</item>
         <item>cn.toside.music.mobile</item>
+        <!-- Spotify 歌词提供者（MediaSession + 公开词源；官方接口仅在抓到 token 时启用） -->
+        <item>com.spotify.music</item>
+        <!-- 与词幕聚合版对齐的宿主（本地歌词 / 媒体会话适配） -->
+        <item>com.apple.android.music</item>
+        <item>com.maxmpz.audioplayer</item>
+        <item>com.tencent.qqmusicpad</item>
+        <item>com.salt.music</item>
+        <item>fun.upup.musicfree</item>
+        <item>org.akanework.gramophone</item>
+        <item>app.symfonik.music.player</item>
         <!-- 链接助手：只在「系统框架」（system）里挂一个剪贴板方法。 -->
         <item>system</item>
+        <!-- 智能文件：APK 下载完成检测（DownloadProvider.update 状态点）。
+             该 provider 跑在 com.android.providers.downloads 进程，
+             必须在 LSPosed 里勾选此作用域后才生效。 -->
+        <item>com.android.providers.downloads</item>
     </string-array>
 
     <string-array name="lyricon_module_tags">

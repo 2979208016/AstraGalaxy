@@ -1,19 +1,19 @@
-# AstraGalaxy 推荐作用域（作用域开放：staticScope=false，用户可在 LSPosed 中自行增删）
+# AstraGalaxy 推荐作用域（staticScope=false：这些是「推荐」，用户仍可在 LSPosed 里自行增删）
+#
+# LSPosed 对声明了 META-INF/xposed/java_init.list 的模块，推荐作用域只认本文件，
+# 不再读 AndroidManifest 的 xposedscope 数组 —— 两份必须同步维护。
 #
 # 两条能力的作用域完全不同，各自只勾真正用得上的：
-#   歌词胶囊  -> 勾「音乐播放器」本身；
-#   链接助手  -> 只勾「系统框架」（system）。
-#                剪贴板服务 ClipboardService 就住在 system_server 里，
-#                用户在任何应用里复制，最终都会走到这里。
-#                这里只做一件事：hook 一个方法、拷出文字、立刻返回，
-#                其余全部在自己的守护线程里完成，开机不会崩。
+#   歌词胶囊 -> 勾「音乐播放器」本身，模块才能读到它自己缓存的歌词、或挂它的歌词回调；
+#   链接助手 -> 只勾「系统框架」（system），剪贴板服务 ClipboardService 住在那里；
+#   智能文件 -> 勾「下载服务」（com.android.providers.downloads），下载完成事件从那里发出。
 #
 # 注意：LSPosed 里「系统框架」的包名是 system，不是 android。
 
 # ============ 歌词胶囊 ============
 # MeloYou（原生歌词文件）
 com.music
-# 本地歌词缓存适配：这些平台必须勾选，模块才能读到它们自己缓存的歌词
+# 本地歌词缓存适配
 cn.kuwo.player
 com.luna.music
 com.tencent.qqmusic
@@ -24,10 +24,22 @@ com.heytap.music
 cn.wenyu.bodian
 # 洛雪音乐助手（歌词模块 / JS 桥）
 cn.toside.music.mobile
+# 媒体会话 + 公开词源适配（Spotify 无本地歌词缓存，走 MediaSession 元数据 + 网络词源）
+com.spotify.music
+# 新建的扩展宿主适配（与 AndroidManifest 的 xposed_scope、README 的适配表保持一致）
+com.apple.android.music
+com.maxmpz.audioplayer
+com.tencent.qqmusicpad
+com.salt.music
+fun.upup.musicfree
+org.akanework.gramophone
+app.symfonik.music.player
 
 # ============ 链接助手 ============
 # 勾「系统框架」（system）。剪贴板服务 ClipboardService 住在这个进程里，
 # 模块在这里挂一个方法的回调，用户在任意应用里复制文字都能被送到。
-# ⚠️ 不要勾「系统界面」（com.android.systemui）：那条路已被证实会静默失效，
-#   链接助手不依赖它。
 system
+
+# ============ 智能文件 ============
+# 下载服务声明的 provider 住在这个包里；下载成功事件由它发出。
+com.android.providers.downloads

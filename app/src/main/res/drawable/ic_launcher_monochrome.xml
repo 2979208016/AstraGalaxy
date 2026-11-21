@@ -4,16 +4,20 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- 单色：星轨环 + 星芒 + 星点 -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M22,64 L36,54 L44,62 L86,38 L74,70 L63,68 L52,82 Z" />
+        android:pathData="M54,26 m-30,0 a30,30 0 1,0 60,0 a30,30 0 1,0 -60,0 M54,26 m-26,0 a26,26 0 1,1 52,0 a26,26 0 1,1 -52,0" />
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M41.8,36 a4.2,4.2 0 1,0 8.4,0 a4.2,4.2 0 1,0 -8.4,0" />
+        android:pathData="M54,46 L58,58 L70,62 L58,66 L54,78 L50,66 L38,62 L50,58 Z" />
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M25.2,76 a2.8,2.8 0 1,0 5.6,0 a2.8,2.8 0 1,0 -5.6,0" />
+        android:pathData="M28,36 a2.6,2.6 0 1,0 5.2,0 a2.6,2.6 0 1,0 -5.2,0" />
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M81.6,72 a2.4,2.4 0 1,0 4.8,0 a2.4,2.4 0 1,0 -4.8,0" />
+        android:pathData="M84,40 a2.4,2.4 0 1,0 4.8,0 a2.4,2.4 0 1,0 -4.8,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,80 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0" />
 </vector>

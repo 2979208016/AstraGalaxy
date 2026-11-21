@@ -1,6 +1,6 @@
-package io.github.proify.lyricon.xinghe
+package io.github.proify.astrafirmament
 
-import io.github.proify.lyricon.xinghe.capability.link.LinkPatterns
+import io.github.proify.astrafirmament.capability.link.LinkPatterns
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
